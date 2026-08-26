@@ -1,0 +1,44 @@
+name: Feature request
+description: Propose a focused capability or safety improvement.
+title: "[Feature]: "
+labels: [enhancement, needs-triage]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: Explain the user problem without prescribing an implementation.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the smallest useful outcome.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: risk
+    attributes:
+      label: Does this expand the current safety boundary?
+      options:
+        - "No"
+        - "Possibly"
+        - "Yes — explain below"
+    validations:
+      required: true
+
+  - type: textarea
+    id: safety
+    attributes:
+      label: Safety and privacy impact
+      description: Consider new windows, data sent to APIs, high-impact actions, and user confirmations.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered

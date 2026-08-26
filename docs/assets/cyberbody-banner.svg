@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" role="img" aria-labelledby="title desc">
+  <title id="title">cyberbody for Windows</title>
+  <desc id="desc">A supervised visual automation agent for one bound Windows application.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b1220"/>
+      <stop offset="0.55" stop-color="#102746"/>
+      <stop offset="1" stop-color="#0b5ba7"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#38bdf8"/>
+      <stop offset="1" stop-color="#60a5fa"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect width="1200" height="360" rx="28" fill="url(#background)"/>
+  <circle cx="1040" cy="30" r="250" fill="#1d7ac9" opacity="0.12"/>
+  <circle cx="1100" cy="300" r="200" fill="#38bdf8" opacity="0.08"/>
+  <g transform="translate(78 70)">
+    <rect width="220" height="220" rx="48" fill="#0a1729" stroke="#38bdf8" stroke-width="3"/>
+    <rect x="38" y="46" width="144" height="110" rx="12" fill="#112b4b" stroke="#7dd3fc" stroke-width="4"/>
+    <path d="M76 184h68M110 156v28" stroke="#7dd3fc" stroke-width="8" stroke-linecap="round"/>
+    <circle cx="110" cy="101" r="28" fill="none" stroke="url(#accent)" stroke-width="7" filter="url(#glow)"/>
+    <path d="M110 60v18M110 124v18M69 101h18M133 101h18" stroke="#f87171" stroke-width="5" stroke-linecap="round"/>
+    <path d="M142 132l34 34" stroke="#fbbf24" stroke-width="8" stroke-linecap="round"/>
+  </g>
+  <g transform="translate(350 84)">
+    <text x="0" y="62" fill="#f8fafc" font-family="Segoe UI, Arial, sans-serif" font-size="64" font-weight="700">cyberbody</text>
+    <text x="0" y="106" fill="#7dd3fc" font-family="Segoe UI, Arial, sans-serif" font-size="24" font-weight="600" letter-spacing="2">FOR WINDOWS</text>
+    <text x="0" y="158" fill="#d8e7f7" font-family="Segoe UI, Arial, sans-serif" font-size="25">自然语言驱动 · 可见像素识别 · 人在回路中</text>
+    <g transform="translate(0 190)" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="600">
+      <rect width="150" height="40" rx="20" fill="#123c61"/><text x="22" y="26" fill="#bae6fd">ONE WINDOW</text>
+      <rect x="164" width="146" height="40" rx="20" fill="#123c61"/><text x="188" y="26" fill="#bae6fd">ACTION PREVIEW</text>
+      <rect x="324" width="150" height="40" rx="20" fill="#123c61"/><text x="348" y="26" fill="#bae6fd">HUMAN CONTROL</text>
+    </g>
+  </g>
+</svg>

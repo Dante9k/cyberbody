@@ -1,0 +1,115 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cyberbody"
+dynamic = ["version"]
+description = "A supervised, vision-first Windows automation agent powered by OpenAI Computer use."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = [
+  "agent",
+  "automation",
+  "computer-use",
+  "openai",
+  "pyside6",
+  "windows",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Win32 (MS Windows)",
+  "Intended Audience :: Developers",
+  "Operating System :: Microsoft :: Windows :: Windows 10",
+  "Operating System :: Microsoft :: Windows :: Windows 11",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Desktop Environment",
+  "Topic :: Software Development :: Testing",
+]
+dependencies = [
+  "openai>=3.3.1,<4",
+  "Pillow>=12.0,<13",
+  "PySide6>=6.8,<7",
+  "keyring>=25.5,<27",
+]
+
+[project.optional-dependencies]
+dev = [
+  "bandit[toml]>=1.8.6,<2",
+  "mypy>=1.18,<2",
+  "pip-audit>=2.9,<3",
+  "pytest>=8.3.0",
+  "pytest-cov>=6.0.0",
+  "PyInstaller>=6.10.0",
+  "ruff>=0.13,<1",
+]
+
+[project.scripts]
+cyberbody = "cyberbody.cli:main"
+cyberbody-test-window = "cyberbody.test_window:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.dynamic]
+version = {attr = "cyberbody.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.coverage.run]
+branch = true
+source = ["cyberbody"]
+omit = [
+  "*/__main__.py",
+  "*/test_window.py",
+  "*/ui.py",
+]
+
+[tool.coverage.report]
+fail_under = 55
+exclude_also = [
+  "if __name__ == .__main__.:",
+  "if TYPE_CHECKING:",
+  "raise NotImplementedError",
+]
+show_missing = true
+skip_covered = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["B", "E", "F", "I", "RUF", "SIM", "UP"]
+ignore = ["E501", "RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["B018"]
+
+[tool.ruff.format]
+line-ending = "lf"
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src/cyberbody"]
+check_untyped_defs = true
+disallow_untyped_defs = true
+ignore_missing_imports = true
+no_implicit_optional = true
+show_error_codes = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+
+[tool.bandit]
+exclude_dirs = [".venv", "build", "dist", "tests"]
+skips = ["B101"]
