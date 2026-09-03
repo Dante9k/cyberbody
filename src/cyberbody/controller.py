@@ -5,7 +5,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from .api import ApiStopped, OpenAIComputerClient
+from .api import ApiStopped, DualModelClient, PlanningBlocked, UnsafeScreenContent
 from .capture import CaptureService, load_frame_image
 from .input import ActionExecutionError, InputExecutor
 from .models import (
@@ -42,7 +42,7 @@ class AutomationController:
         capture: CaptureService,
         executor: InputExecutor,
         safety: SafetyGate,
-        api_factory: Callable[[Callable[[str], None]], OpenAIComputerClient],
+        api_factory: Callable[[Callable[[str], None]], DualModelClient],
         events: ControllerEvents | None = None,
         *,
         max_actions: int = 50,
@@ -72,7 +72,13 @@ class AutomationController:
     def is_running(self) -> bool:
         return bool(self._thread and self._thread.is_alive())
 
-    def start(self, task: str, target: TargetWindow, model: str) -> None:
+    def start(
+        self,
+        task: str,
+        target: TargetWindow,
+        vision_model: str,
+        action_model: str,
+    ) -> None:
         if self.is_running:
             raise RuntimeError("已有任务正在运行")
         normalized = task.strip()
@@ -85,11 +91,10 @@ class AutomationController:
         self.target = target
         self._stop.clear()
         self._run_gate.set()
-        self.store.start(normalized, model, target)
+        self.store.start(normalized, vision_model, action_model, target)
         self._thread = threading.Thread(
             target=self._run,
             name="cyberbody-automation",
-            args=(model,),
             daemon=True,
         )
         self._thread.start()
@@ -126,7 +131,7 @@ class AutomationController:
             "session_id": self.store.summary.session_id if self.store.summary else "",
         }
 
-    def _run(self, model: str) -> None:
+    def _run(self) -> None:
         started = time.monotonic()
         current_frame: CaptureFrame | None = None
         last_hash: int | None = None
@@ -258,6 +263,14 @@ class AutomationController:
                     self.events.log("info", "已放弃旧坐标并发送最新窗口截图")
         except ApiStopped:
             self._finish(SessionState.STOPPED, "任务已停止")
+        except UnsafeScreenContent as exc:
+            message = f"安全停止：{exc}"
+            self.store.append_event("security_stop", {"message": message})
+            self._finish(SessionState.STOPPED, message)
+        except PlanningBlocked as exc:
+            message = str(exc)
+            self.store.append_event("planner_blocked", {"message": message})
+            self._finish(SessionState.FAILED, message)
         except TimeoutError as exc:
             self.store.append_event("error", {"message": str(exc)})
             self._finish(SessionState.TIMED_OUT, str(exc))
@@ -289,7 +302,7 @@ class AutomationController:
 
     def _inspect_and_classify(
         self,
-        api: OpenAIComputerClient,
+        api: DualModelClient,
         action: ComputerAction,
         frame: CaptureFrame,
     ) -> ActionProposal:

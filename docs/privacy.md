@@ -6,10 +6,11 @@ cyberbody 不包含遥测、广告 SDK 或自建分析服务，但它必须处�
 
 | Data | Where it goes | Retention |
 | --- | --- | --- |
-| 自然语言任务 | OpenAI API；本地 `session.json/events.jsonl` | 本地默认 7 天；API 侧遵循你的 OpenAI 账户与数据控制设置 |
-| 目标窗口截图 | OpenAI API；本地会话目录 | 本地默认 7 天 |
-| 动作、风险分类和状态 | 本地 JSONL；风险预检请求会发送必要动作信息和标注截图 | 本地默认 7 天 |
-| API 密钥 | `OPENAI_API_KEY` 进程环境或 Windows Credential Manager | 直到环境结束或用户删除凭据 |
+| 自然语言任务 | 视觉与操作 API；本地 `session.json/events.jsonl` | 本地默认 7 天；API 侧取决于所选服务商 |
+| 目标窗口截图 | 仅视觉 API；本地会话目录 | 本地默认 7 天 |
+| 结构化界面描述 | 操作 API；仅保留摘要到最近内存历史 | 任务结束时释放 |
+| 动作、风险分类和状态 | 本地 JSONL；视觉风险预检接收必要动作信息和标注截图 | 本地默认 7 天 |
+| API 密钥 | 角色专用环境变量或 Windows Credential Manager | 直到环境结束或用户删除凭据 |
 | 窗口标题、PID、尺寸和 DPI | 本地会话元数据；必要的截图上下文 | 本地默认 7 天 |
 
 ## 不会收集的内容
@@ -35,21 +36,24 @@ cyberbody 在启动时和每 24 小时清理超过保留期的会话。默认保
 
 ## API 密钥
 
-读取优先级：
+视觉与操作密钥相互独立，读取优先级：
 
-1. 当前进程的 `OPENAI_API_KEY` 环境变量；
-2. Windows Credential Manager 中 `cyberbody/OpenAI` 条目。
+1. 当前进程的 `CYBERBODY_VISION_API_KEY` / `CYBERBODY_ACTION_API_KEY`；
+2. OpenAI 默认地址可回退到 `OPENAI_API_KEY`；
+3. Windows Credential Manager 中按角色和 API 地址摘要隔离的 `cyberbody/VisionAPI/<摘要>` / `cyberbody/ActionAPI/<摘要>`；
+4. OpenAI 默认地址可回退到旧版 `cyberbody/OpenAI` 条目。
 
-不要把真实密钥写进 `.env` 并提交。仓库的 `.env.example` 只包含空占位符。日志脱敏会替换常见 OpenAI 密钥、Bearer 令牌和敏感字段，但不应把脱敏当作提交真实秘密的许可。
+第三方凭据不会自动从一个接口角色或 API 地址复用到另一个；修改地址后必须重新录入，避免把某个服务商的密钥发送给不同端点。`OPENAI_API_KEY` 和旧版凭据只在 OpenAI 默认地址回退使用。不要把真实密钥写进 `.env` 并提交。仓库的 `.env.example` 只包含空占位符。日志脱敏会替换常见 API 密钥、Bearer 令牌和敏感字段，但不应把脱敏当作提交真实秘密的许可。
 
 ## 第三方处理
 
-任务文本和目标窗口截图会发送到 OpenAI Responses API。OpenAI 侧的数据处理、保留和区域能力取决于你的账户、组织设置和适用条款。发布者无法替你配置这些控制，也不应在 README 中承诺第三方未明确保证的保留行为。
+目标窗口截图、任务相关提示和标注风险预览会发送到视觉接口。操作接口接收用户任务、视觉模型生成的界面文字与坐标 JSON、最近动作历史，但不接收截图。两个接口可以属于不同服务商，其数据处理、保留和区域能力分别取决于你的账户、组织设置和适用条款。发布者无法替你配置这些控制，也不应在 README 中承诺第三方未明确保证的保留行为。
 
 使用项目前请查看：
 
 - [OpenAI API data controls](https://developers.openai.com/api/docs/guides/your-data)
-- [OpenAI Computer use guide](https://developers.openai.com/api/docs/guides/tools-computer-use)
+- [OpenAI Responses API](https://developers.openai.com/api/reference/resources/responses)
+- [DeepSeek Vision](https://api-docs.deepseek.com/guides/vision/)
 
 ## 降低暴露的建议
 

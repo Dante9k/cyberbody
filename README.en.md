@@ -9,16 +9,16 @@
 <p align="center">
   <img alt="Windows 10 and 11" src="https://img.shields.io/badge/Windows-10%2022H2%20%7C%2011-0078D4?logo=windows11&logoColor=white">
   <img alt="Python 3.12" src="https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white">
-  <img alt="OpenAI Responses API" src="https://img.shields.io/badge/OpenAI-Responses%20API-412991?logo=openai&logoColor=white">
+  <img alt="Responses-compatible APIs" src="https://img.shields.io/badge/API-Responses--compatible-412991">
   <img alt="MIT License" src="https://img.shields.io/badge/License-MIT-22c55e">
   <img alt="Status Alpha" src="https://img.shields.io/badge/Status-Alpha-f59e0b">
 </p>
 
 # cyberbody for Windows
 
-cyberbody is a **human-supervised visual automation agent for Windows**. Describe a task, explicitly bind one target window, and let the application run a controlled loop of screenshot, visual planning, risk inspection, visible preview, input, and observation.
+cyberbody is a **human-supervised visual automation agent for Windows**. Describe a task, explicitly bind one target window, and let the application run a controlled loop of screenshot, visual perception, text planning, risk inspection, visible preview, input, and observation.
 
-The agent understands the interface exclusively from **visible pixels**. It does not read UI Automation trees, browser DOMs, or application internals. The OpenAI Responses API GA `computer` tool proposes actions; a deterministic local safety layer validates every action before Win32 `SendInput` can execute it.
+The agent understands the interface exclusively from **visible pixels**. It does not read UI Automation trees, browser DOMs, or application internals. An image-capable model converts screenshots into structured UI descriptions with coordinates; a separate planner receives text JSON only and proposes the next action. A deterministic local safety layer validates every action before Win32 `SendInput` can execute it.
 
 > [!WARNING]
 > cyberbody is alpha software that sends real keyboard and mouse input. Start with the bundled deterministic test window. Do not use it for payments, production administration, elevated applications, or unattended workflows. It is not a sandbox.
@@ -26,6 +26,7 @@ The agent understands the interface exclusively from **visible pixels**. It does
 ## Highlights
 
 - **One-window authorization:** the task pauses when the target loses focus, moves, minimizes, closes, or changes identity.
+- **Decoupled models:** screenshots go only to the vision endpoint, so the action planner may be text-only.
 - **Visible action previews:** click locations and drag paths are highlighted before execution.
 - **Human approval:** destructive, external, financial, permission, upload, and sensitive-data actions stop immediately before impact.
 - **Auditable sessions:** raw screenshots, model-sized screenshots, annotated previews, and JSONL events are retained locally.
@@ -37,8 +38,10 @@ The agent understands the interface exclusively from **visible pixels**. It does
 ```mermaid
 flowchart LR
     T[Task + bound window] --> S[Visible screenshot]
-    S --> C[OpenAI computer tool]
-    C --> P[Proposed action]
+    S --> C[Vision model]
+    C --> J[Structured UI JSON]
+    J --> A[Text-only action model]
+    A --> P[One proposed action]
     P --> R[Structured risk preflight]
     R --> G[Local safety gate]
     G -->|allow| V[Visible preview]
@@ -57,11 +60,12 @@ See [docs/architecture.md](docs/architecture.md) for state, coordinate, IPC, and
 
 - Windows 10 22H2 or Windows 11 x64
 - Python 3.12 for source development, or the self-contained portable release
-- Network access and an OpenAI API key
-- Account access to GPT-5.6 Computer use
+- Network access and credentials for both configured endpoints
+- An image-capable vision model with JSON Schema output support
+- A text-capable action model with JSON Schema output support
 - A visible, non-elevated target application
 
-Model availability and account limits depend on your OpenAI account and organization.
+Both endpoints use an OpenAI Responses-compatible `/responses` API. Model availability, compatibility, and limits depend on the configured providers.
 
 ## Quick start from source
 
@@ -89,14 +93,27 @@ Use the crosshair to bind the test window and try:
 
 > Enter “小明” in the name field, drag progress to 80, tick the agreement box, scroll to the bottom, and click Next. Do not click Delete.
 
-## API key handling
+## Dual-model endpoints
 
-cyberbody reads the key in this order:
+The supervisor exposes two independent endpoint profiles:
 
-1. `OPENAI_API_KEY` in the current process environment;
-2. the `cyberbody/OpenAI` entry in Windows Credential Manager.
+| Endpoint | Input | Output | Required capability |
+| --- | --- | --- | --- |
+| Vision | Bound-window screenshot | Structured text, elements, bounds, and coordinates | Image input and JSON Schema |
+| Action | User task, UI JSON, and recent action history | At most one structured action per round | Text input and JSON Schema |
 
-The panel can save the key directly to Credential Manager. The key is never accepted as a command-line argument and is not written to `config.json` or session logs.
+Leave an API URL empty to use OpenAI, or enter an HTTPS Responses-compatible endpoint. Local model servers may use loopback HTTP. Models, URLs, and non-secret settings are saved to `config.json`. Third-party credentials are scoped by role and a hash of the API URL, so changing a URL requires entering a key for the new endpoint.
+
+Keys are read from `CYBERBODY_VISION_API_KEY` and `CYBERBODY_ACTION_API_KEY`, or endpoint-scoped `cyberbody/VisionAPI/<URL hash>` and `cyberbody/ActionAPI/<URL hash>` Windows Credential Manager entries. OpenAI endpoints may also use `OPENAI_API_KEY` and the legacy `cyberbody/OpenAI` credential. Keys are never accepted as command-line arguments or written to configuration and session logs.
+
+Example compatible model split:
+
+```text
+Vision URL: https://api.deepseek.com
+Vision model: deepseek-v4-flash-vision-exp
+Action URL: https://api.deepseek.com
+Action model: deepseek-v4-flash
+```
 
 ## CLI
 
@@ -131,7 +148,7 @@ The deterministic local policy may always raise the model's risk level. Rejectin
 
 ## Privacy
 
-The task, target-window screenshots, and necessary action context are sent to the OpenAI Responses API. Local sessions are written to:
+Screenshots and task-related prompts are sent to the configured vision endpoint. The action endpoint receives the user task, the vision model's text JSON, and recent action history, but not the screenshot. Provider-side handling and retention depend on both services you configure. Local sessions are written to:
 
 ```text
 %LOCALAPPDATA%\cyberbody\sessions\<session-id>
@@ -173,7 +190,7 @@ For repository settings, branch protection, naming, and demo preparation, see th
 
 ```text
 src/cyberbody/
-├── api.py          OpenAI computer loop and structured preflight
+├── api.py          Dual-model perception/planning loop and structured preflight
 ├── capture.py      Visible-pixel capture and model scaling
 ├── controller.py   State machine, limits, and worker thread
 ├── input.py        Win32 SendInput and Unicode typing
@@ -194,11 +211,14 @@ Please report vulnerabilities privately. Do not publish real credentials, person
 
 ## References
 
-- [OpenAI Computer use guide](https://developers.openai.com/api/docs/guides/tools-computer-use)
-- [GPT-5.6 Sol model documentation](https://developers.openai.com/api/docs/models/gpt-5.6-sol)
+- [OpenAI Responses API](https://developers.openai.com/api/reference/resources/responses)
+- [OpenAI image inputs](https://developers.openai.com/api/docs/guides/images-vision)
+- [OpenAI structured outputs](https://developers.openai.com/api/docs/guides/structured-outputs)
+- [DeepSeek Vision](https://api-docs.deepseek.com/guides/vision/)
+- [DeepSeek Responses API](https://api-docs.deepseek.com/guides/responses_api/)
 - [OpenAI Python SDK](https://github.com/openai/openai-python)
 
-Official OpenAI documentation identifies `gpt-5.6` as the GPT-5.6 Sol alias and lists Computer use support through the Responses API. Availability, pricing, and limits may change; verify them in current official documentation and your account dashboard.
+Compatibility, capabilities, pricing, and limits may change. Verify them in each configured provider's current documentation and account dashboard. Accepting a third-party endpoint does not imply endorsement or support between cyberbody and that provider.
 
 ## License
 

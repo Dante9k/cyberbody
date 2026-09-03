@@ -22,7 +22,7 @@ def target():
 
 def test_session_store_writes_summary_events_and_images(tmp_path):
     store = SessionStore(tmp_path / "sessions")
-    summary = store.start("do a thing", "gpt-5.6", target())
+    summary = store.start("do a thing", "vision-model", "action-model", target())
     source = Image.new("RGB", (80, 60), "white")
     source_path, model_path = store.save_capture(1, source, source)
     store.increment_action()
@@ -63,7 +63,7 @@ def test_redaction_removes_secret_fields_and_openai_keys():
 
 def test_export_contains_only_relative_session_files(tmp_path):
     store = SessionStore(tmp_path / "sessions")
-    store.start("inspect", "gpt-5.6", target())
+    store.start("inspect", "vision-model", "action-model", target())
     destination = tmp_path / "export.zip"
 
     store.export(destination)

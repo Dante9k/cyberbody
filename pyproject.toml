@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "cyberbody"
 dynamic = ["version"]
-description = "A supervised, vision-first Windows automation agent powered by OpenAI Computer use."
+description = "A supervised dual-model visual automation agent for Windows."
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"

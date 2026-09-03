@@ -1,20 +1,29 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 APP_NAME = "cyberbody"
-KEYRING_SERVICE = "cyberbody/OpenAI"
+LEGACY_KEYRING_SERVICE = "cyberbody/OpenAI"
+KEYRING_SERVICE_PREFIXES = {
+    "vision": "cyberbody/VisionAPI",
+    "action": "cyberbody/ActionAPI",
+}
 KEYRING_USER = "default"
 
 _SECRET_PATTERNS = (
     re.compile(r"\bsk-[A-Za-z0-9_-]{12,}\b"),
     re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]{16,}\b", re.IGNORECASE),
-    re.compile(r"\bOPENAI_API_KEY\s*[:=]\s*[^\s,;]+", re.IGNORECASE),
+    re.compile(
+        r"\b(?:OPENAI_API_KEY|CYBERBODY_(?:VISION|ACTION)_API_KEY)\s*[:=]\s*[^\s,;]+",
+        re.IGNORECASE,
+    ),
 )
 
 
@@ -27,7 +36,10 @@ def app_data_dir() -> Path:
 
 @dataclass(slots=True)
 class AppConfig:
-    model: str = "gpt-5.6"
+    vision_model: str = "gpt-5.6"
+    action_model: str = "gpt-5.6"
+    vision_base_url: str = ""
+    action_base_url: str = ""
     retention_days: int = 7
     max_actions: int = 50
     max_seconds: int = 600
@@ -48,6 +60,10 @@ class AppConfig:
             return cls()
         if not isinstance(raw, dict):
             return cls()
+        legacy_model = raw.get("model")
+        if isinstance(legacy_model, str) and legacy_model.strip():
+            raw.setdefault("vision_model", legacy_model)
+            raw.setdefault("action_model", legacy_model)
         allowed = cls.__dataclass_fields__.keys()
         values = {key: value for key, value in raw.items() if key in allowed}
         try:
@@ -58,8 +74,12 @@ class AppConfig:
         return config
 
     def validate(self) -> None:
-        if not self.model.strip():
-            raise ValueError("Model name cannot be empty")
+        if not self.vision_model.strip():
+            raise ValueError("Vision model name cannot be empty")
+        if not self.action_model.strip():
+            raise ValueError("Action model name cannot be empty")
+        _validate_base_url("vision_base_url", self.vision_base_url)
+        _validate_base_url("action_base_url", self.action_base_url)
         if not 1 <= self.retention_days <= 3650:
             raise ValueError("retention_days must be between 1 and 3650")
         if not 1 <= self.max_actions <= 1000:
@@ -89,35 +109,85 @@ class AppConfig:
 
 class ApiKeyStore:
     @staticmethod
-    def get() -> str | None:
-        environment_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    def get(
+        role: str,
+        base_url: str = "",
+        *,
+        include_openai_fallback: bool = False,
+    ) -> str | None:
+        service = _keyring_service(role, base_url)
+        environment_key = os.environ.get(f"CYBERBODY_{role.upper()}_API_KEY", "").strip()
         if environment_key:
             return environment_key
+        if include_openai_fallback:
+            openai_key = os.environ.get("OPENAI_API_KEY", "").strip()
+            if openai_key:
+                return openai_key
         try:
             import keyring
 
-            value = keyring.get_password(KEYRING_SERVICE, KEYRING_USER)
+            value = keyring.get_password(service, KEYRING_USER)
+            if not value and include_openai_fallback:
+                value = keyring.get_password(LEGACY_KEYRING_SERVICE, KEYRING_USER)
         except Exception:
             return None
         return value.strip() if value else None
 
     @staticmethod
-    def set(value: str) -> None:
+    def set(role: str, value: str, base_url: str = "") -> None:
+        service = _keyring_service(role, base_url)
         key = value.strip()
         if not key:
             raise ValueError("API key cannot be empty")
         import keyring
 
-        keyring.set_password(KEYRING_SERVICE, KEYRING_USER, key)
+        keyring.set_password(service, KEYRING_USER, key)
 
     @staticmethod
-    def delete() -> None:
+    def delete(role: str, base_url: str = "") -> None:
+        service = _keyring_service(role, base_url)
         try:
             import keyring
 
-            keyring.delete_password(KEYRING_SERVICE, KEYRING_USER)
+            keyring.delete_password(service, KEYRING_USER)
         except Exception:
             return
+
+
+def _keyring_service(role: str, base_url: str) -> str:
+    try:
+        prefix = KEYRING_SERVICE_PREFIXES[role]
+    except KeyError:
+        raise ValueError(f"Unknown API role: {role}") from None
+    endpoint = base_url.strip().rstrip("/") or "https://api.openai.com/v1"
+    endpoint_id = hashlib.sha256(endpoint.encode("utf-8")).hexdigest()[:12]
+    return f"{prefix}/{endpoint_id}"
+
+
+def is_openai_base_url(value: str) -> bool:
+    normalized = value.strip().rstrip("/").casefold()
+    return not normalized or normalized in {
+        "https://api.openai.com",
+        "https://api.openai.com/v1",
+    }
+
+
+def _validate_base_url(name: str, value: str) -> None:
+    normalized = value.strip()
+    if not normalized:
+        return
+    parsed = urlsplit(normalized)
+    if not parsed.netloc or parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError(f"{name} must be a URL without embedded credentials")
+    if parsed.scheme == "https":
+        return
+    if parsed.scheme == "http" and (parsed.hostname or "").casefold() in {
+        "localhost",
+        "127.0.0.1",
+        "::1",
+    }:
+        return
+    raise ValueError(f"{name} must use HTTPS, except for a local loopback endpoint")
 
 
 def redact_secrets(value: Any) -> Any:

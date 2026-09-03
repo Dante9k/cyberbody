@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -44,6 +45,15 @@ SECRET_PATTERNS = {
 PERSONAL_PATH_PATTERN = re.compile(r"(?i)(?:[A-Z]:\\Users\\|/Users/|/home/)([^\\/\s]+)")
 
 
+@dataclass(frozen=True, slots=True)
+class AuditFinding:
+    """Location and category of a potential privacy issue, without matched content."""
+
+    path: Path
+    line_number: int
+    category: str
+
+
 def iter_text_files(root: Path) -> list[Path]:
     files: list[Path] = []
     for path in root.rglob("*"):
@@ -62,31 +72,38 @@ def iter_text_files(root: Path) -> list[Path]:
     return files
 
 
-def audit_file(path: Path) -> list[str]:
+def audit_file(path: Path) -> list[AuditFinding]:
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return []
-    findings: list[str] = []
+    findings: list[AuditFinding] = []
     for line_number, line in enumerate(text.splitlines(), start=1):
         lowered = line.casefold()
         for label, pattern in SECRET_PATTERNS.items():
             if pattern.search(line) and not any(
                 marker in lowered for marker in PLACEHOLDER_MARKERS
             ):
-                findings.append(f"{path}:{line_number}: possible {label}")
+                findings.append(AuditFinding(path, line_number, label))
         match = PERSONAL_PATH_PATTERN.search(line)
         if match and match.group(1).casefold() not in {"username", "user", "name"}:
-            findings.append(f"{path}:{line_number}: possible personal home path")
+            findings.append(AuditFinding(path, line_number, "personal home path"))
     return findings
 
 
 def main() -> int:
     findings = [finding for path in iter_text_files(PROJECT_ROOT) for finding in audit_file(path)]
     if findings:
-        print("Privacy audit failed:", file=sys.stderr)
+        print(
+            f"Privacy audit failed: {len(findings)} potential issue(s) found.",
+            file=sys.stderr,
+        )
         for finding in findings:
-            print(f"- {finding}", file=sys.stderr)
+            relative_path = finding.path.relative_to(PROJECT_ROOT).as_posix()
+            print(
+                f"- {relative_path}:{finding.line_number}: possible {finding.category}",
+                file=sys.stderr,
+            )
         return 1
     print("Privacy audit passed: no high-confidence secrets or personal paths found.")
     return 0
