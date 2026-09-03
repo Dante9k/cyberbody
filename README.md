@@ -9,16 +9,16 @@
 <p align="center">
   <img alt="Windows 10 and 11" src="https://img.shields.io/badge/Windows-10%2022H2%20%7C%2011-0078D4?logo=windows11&logoColor=white">
   <img alt="Python 3.12" src="https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white">
-  <img alt="OpenAI Responses API" src="https://img.shields.io/badge/OpenAI-Responses%20API-412991?logo=openai&logoColor=white">
+  <img alt="Responses-compatible APIs" src="https://img.shields.io/badge/API-Responses--compatible-412991">
   <img alt="MIT License" src="https://img.shields.io/badge/License-MIT-22c55e">
   <img alt="Status Alpha" src="https://img.shields.io/badge/Status-Alpha-f59e0b">
 </p>
 
 # cyberbody for Windows
 
-cyberbody 是一个**人在回路中的 Windows 可视化操作智能体**。你用自然语言描述任务、明确绑定一个目标窗口；它循环执行“截图 → 视觉规划 → 风险预检 → 高亮预览 → 鼠标键盘操作 → 再观察”，直到完成、停止或需要你接管。
+cyberbody 是一个**人在回路中的 Windows 可视化操作智能体**。你用自然语言描述任务、明确绑定一个目标窗口；它循环执行“截图 → 视觉识别 → 文本规划 → 风险预检 → 高亮预览 → 鼠标键盘操作 → 再观察”，直到完成、停止或需要你接管。
 
-它只依赖目标窗口的**可见像素**理解界面，不读取 UI Automation 控件树、浏览器 DOM 或应用内部数据。动作由 OpenAI Responses API 的正式 `computer` 工具提出，并在本地经过窗口边界和安全策略裁决后，使用 Win32 `SendInput` 执行。
+它只依赖目标窗口的**可见像素**理解界面，不读取 UI Automation 控件树、浏览器 DOM 或应用内部数据。视觉模型把截图转换为带坐标的结构化界面描述，操作模型只读取文本 JSON 并提出下一步动作；本地安全层裁决后再由 Win32 `SendInput` 执行。因此操作模型不需要支持图片，两个模型也可以使用不同的 Responses-compatible API。
 
 > [!WARNING]
 > cyberbody 当前处于 Alpha 阶段，会向真实桌面发送输入。请先使用项目自带测试窗口，不要用于付款、生产后台、管理员工具或无人值守任务。它不是安全沙箱。
@@ -28,6 +28,7 @@ cyberbody 是一个**人在回路中的 Windows 可视化操作智能体**。你
 很多桌面自动化方案依赖控件树、固定选择器或全桌面控制。cyberbody 选择了更窄但更透明的边界：
 
 - **一次只授权一个窗口**：目标失焦、移动、最小化、关闭或被替换时暂停。
+- **视觉与操作解耦**：截图只发给视觉接口，纯文本模型也可以承担操作规划。
 - **动作先给人看**：点击、拖拽和输入位置先由透明覆盖层高亮，再执行。
 - **高影响动作即时确认**：删除、发送、上传、付款、权限变更和敏感输入不会静默发生。
 - **可审计**：每轮保存原始截图、模型截图、标注预览和动作级 JSONL 日志。
@@ -40,7 +41,8 @@ cyberbody 是一个**人在回路中的 Windows 可视化操作智能体**。你
 | --- | --- |
 | 任务 | 自然语言输入、单任务执行、简要状态与当前动作说明 |
 | 绑定 | 下拉窗口列表、十字准星选窗、根窗口与同进程自有模态对话框 |
-| 视觉 | 可见客户区截图、模型等比例缩放、截图缩略图、感知哈希卡住检测 |
+| 模型 | 独立视觉/操作模型、独立 API 地址与凭据、旧版单模型配置自动迁移 |
+| 视觉 | 可见客户区截图、结构化元素与坐标、截图缩略图、感知哈希卡住检测 |
 | 动作 | 点击、双击、移动、滚动、拖拽、按键、Unicode/中文输入、等待、截图 |
 | 监管 | 约 500 ms 动作高亮、暂停/继续/停止、风险确认、人工接管 |
 | 安全 | 前台/进程/几何/坐标检查、提示注入拒绝、50 动作/10 分钟默认上限 |
@@ -55,15 +57,18 @@ sequenceDiagram
     actor User as 用户
     participant UI as 监管面板
     participant Window as 绑定窗口
-    participant Model as OpenAI computer
+    participant Vision as 视觉模型
+    participant Action as 操作模型
     participant Gate as 本地安全层
 
     User->>UI: 输入任务并绑定窗口
     UI->>Window: 捕获可见客户区
-    UI->>Model: 任务 + 截图
-    Model-->>UI: 下一组动作
-    UI->>Model: 标注动作风险预检
-    Model-->>Gate: purpose / target / risk / decision
+    UI->>Vision: 截图（原始像素）
+    Vision-->>UI: 结构化元素、文字与坐标
+    UI->>Action: 用户任务 + 界面 JSON
+    Action-->>UI: 一个结构化动作
+    UI->>Vision: 标注截图风险预检
+    Vision-->>Gate: purpose / target / risk / decision
     Gate-->>UI: allow / confirm / handoff / deny
     UI-->>User: 高亮或请求确认
     UI->>Window: 边界复检后 SendInput
@@ -79,13 +84,13 @@ sequenceDiagram
 1. 从 GitHub Releases 下载 `cyberbody-Windows-x64.zip` 和对应 `.sha256`。
 2. 校验哈希并解压到普通用户可写目录。
 3. 运行 `cyberbody\cyberbody.exe`。
-4. 设置 OpenAI API 密钥，启动项目自带测试窗口，绑定后执行示例任务。
+4. 配置视觉接口和操作接口，启动项目自带测试窗口，绑定后执行示例任务。
 
 当前构建没有商业代码签名，首次启动时 Windows SmartScreen 可能显示“未知发布者”。请只从项目的 GitHub Release 获取文件并核对 SHA-256。
 
 ### 方式二：从源码运行
 
-要求：Windows 10 22H2/Windows 11 x64、Python 3.12、联网环境，以及能够使用 `gpt-5.6` Computer use 的 OpenAI API 账户。模型可用性取决于你的账户和组织权限。
+要求：Windows 10 22H2/Windows 11 x64、Python 3.12 和联网环境。视觉模型必须支持图片输入和 JSON Schema；操作模型只需支持文本输入和 JSON Schema。两端均使用 OpenAI Responses-compatible `/responses` 接口。
 
 ```powershell
 git clone <repository-url>
@@ -111,23 +116,40 @@ python -m venv .venv
 
 > 在姓名中输入“小明”，把进度拖到 80，勾选同意，滚动到底部并点击“下一步”；不要点击删除。
 
-## API 密钥
+## 双模型接口
 
-cyberbody 按以下顺序读取密钥：
+面板提供两套相互独立的配置：
 
-1. 当前进程的 `OPENAI_API_KEY` 环境变量；
-2. Windows Credential Manager 中由面板保存的 `cyberbody/OpenAI` 凭据。
+| 接口 | 输入 | 输出 | 能力要求 |
+| --- | --- | --- | --- |
+| 视觉模型 | 目标窗口截图 | 可操作元素、文字、状态、边界和坐标 JSON | 必须支持图片与 JSON Schema |
+| 操作模型 | 用户任务、界面 JSON、最近动作历史 | 每轮最多一个结构化动作 | 只需文本与 JSON Schema |
 
-推荐直接在面板中录入。密钥不会写入命令行参数、`config.json` 或会话日志。
+API 地址留空时使用 OpenAI；也可填写兼容 Responses API 的 HTTPS 地址。本机模型服务可使用 `http://localhost` 或 `http://127.0.0.1`。视觉和操作接口可以来自不同服务商；第三方凭据按“角色 + API 地址摘要”隔离，修改地址后必须为新地址重新录入密钥。
 
-也可以只为当前 PowerShell 会话设置环境变量：
+例如使用 DeepSeek 时，视觉接口应选择支持图片的模型，操作接口可以选择纯文本模型：
+
+```text
+视觉 API：https://api.deepseek.com
+视觉模型：deepseek-v4-flash-vision-exp
+操作 API：https://api.deepseek.com
+操作模型：deepseek-v4-flash
+```
+
+模型和 API 地址保存在 `%LOCALAPPDATA%\cyberbody\config.json`；密钥只从以下位置读取：
+
+1. `CYBERBODY_VISION_API_KEY` / `CYBERBODY_ACTION_API_KEY`；
+2. OpenAI 默认地址还可回退到 `OPENAI_API_KEY`；
+3. 面板写入的 Windows Credential Manager 条目 `cyberbody/VisionAPI/<地址摘要>` 和 `cyberbody/ActionAPI/<地址摘要>`；
+4. 旧版 OpenAI 配置可回退读取 `cyberbody/OpenAI`，但只用于 OpenAI 默认地址。
 
 ```powershell
-$env:OPENAI_API_KEY = "<your-api-key>"
+$env:CYBERBODY_VISION_API_KEY = "<vision-api-key>"
+$env:CYBERBODY_ACTION_API_KEY = "<action-api-key>"
 .\.venv\Scripts\cyberbody.exe start
 ```
 
-不要把真实密钥写进 `.env.example`、Issue、截图或仓库历史。
+不要把真实密钥写进 `.env.example`、Issue、截图或仓库历史。第三方接口的兼容程度不同，正式使用前必须在项目测试窗口验证图片输入和 JSON Schema。
 
 ## 命令行
 
@@ -169,7 +191,7 @@ cyberbody.exe stop
 
 ## 隐私与本地数据
 
-任务文本、目标窗口截图和必要的动作上下文会发送到 OpenAI Responses API。OpenAI 侧的数据处理遵循你的账户与组织设置。cyberbody 自身不包含遥测或广告分析。
+目标窗口截图和任务相关提示会发送到视觉接口；操作接口只接收用户任务、视觉模型生成的文本 JSON 和最近动作历史，不接收截图。两端的数据处理与保留取决于你配置的服务商及账户设置。cyberbody 自身不包含遥测或广告分析。
 
 本地路径：
 
@@ -232,7 +254,7 @@ cyberbody/
 ├── docs/                    # 架构、隐私和发布说明
 ├── scripts/                 # 质量、隐私扫描和构建脚本
 ├── src/cyberbody/
-│   ├── api.py               # OpenAI computer 循环与结构化预检
+│   ├── api.py               # 双模型识别/规划循环与结构化预检
 │   ├── capture.py           # 可见像素截图与模型缩放
 │   ├── controller.py        # 状态机、限制和工作线程
 │   ├── input.py             # Win32 SendInput
@@ -291,13 +313,16 @@ Roadmap 不是交付承诺。欢迎在 Feature Request 中讨论用例和安全�
 - 安全漏洞：请勿公开提交，遵循 [SECURITY.md](SECURITY.md)
 - 版本变化：[CHANGELOG.md](CHANGELOG.md)
 
-## 官方接口参考
+## 接口参考
 
-- [OpenAI Computer use guide](https://developers.openai.com/api/docs/guides/tools-computer-use)
-- [GPT-5.6 Sol model documentation](https://developers.openai.com/api/docs/models/gpt-5.6-sol)
+- [OpenAI Responses API](https://developers.openai.com/api/reference/resources/responses)
+- [OpenAI image inputs](https://developers.openai.com/api/docs/guides/images-vision)
+- [OpenAI structured outputs](https://developers.openai.com/api/docs/guides/structured-outputs)
+- [DeepSeek Vision](https://api-docs.deepseek.com/guides/vision/)
+- [DeepSeek Responses API](https://api-docs.deepseek.com/guides/responses_api/)
 - [OpenAI Python SDK](https://github.com/openai/openai-python)
 
-OpenAI 官方文档确认 `gpt-5.6` 是 GPT-5.6 Sol 的别名，并通过 Responses API 支持 Computer use。账户可用性、限额和费用可能变化，请以官方文档和你的账户控制台为准。
+兼容性、模型能力、限额和费用可能变化，请以所选服务商的当前文档和账户控制台为准。配置第三方 API 地址不代表 cyberbody 或该服务商对彼此提供认可或支持。
 
 ## License
 

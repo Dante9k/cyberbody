@@ -17,7 +17,7 @@
 
 推荐描述：
 
-> A supervised, vision-first Windows automation agent powered by OpenAI Computer use — one bound window, visible previews, and human approval for risky actions.
+> A supervised, dual-model Windows visual automation agent — one bound window, visible previews, and human approval for risky actions.
 
 推荐 Topics：
 

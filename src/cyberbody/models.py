@@ -204,7 +204,8 @@ class ActionProposal:
 class SessionSummary:
     session_id: str
     task: str
-    model: str
+    vision_model: str
+    action_model: str
     target: dict[str, Any]
     state: SessionState
     started_at: str

@@ -111,7 +111,7 @@ def test_controller_completes_screenshot_action_loop(tmp_path):
         events,
         preview_delay_ms=0,
     )
-    controller.start("打开项目", make_target(), "gpt-5.6")
+    controller.start("打开项目", make_target(), "vision-model", "action-model")
     assert finished.wait(3)
     assert final["state"] == SessionState.COMPLETED
     assert [action.type for action in executor.actions] == ["click"]
@@ -142,7 +142,7 @@ def test_controller_does_not_execute_rejected_risk_action(tmp_path):
         events,
         preview_delay_ms=0,
     )
-    controller.start("删除记录", make_target(), "gpt-5.6")
+    controller.start("删除记录", make_target(), "vision-model", "action-model")
     assert finished.wait(3)
     assert final["state"] == SessionState.STOPPED
     assert executor.actions == []

@@ -25,7 +25,13 @@ class SessionStore:
         self.summary: SessionSummary | None = None
         self.session_dir: Path | None = None
 
-    def start(self, task: str, model: str, target: TargetWindow) -> SessionSummary:
+    def start(
+        self,
+        task: str,
+        vision_model: str,
+        action_model: str,
+        target: TargetWindow,
+    ) -> SessionSummary:
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         session_id = f"{timestamp}-{uuid.uuid4().hex[:8]}"
         self.session_dir = self.root / session_id
@@ -33,13 +39,21 @@ class SessionStore:
         self.summary = SessionSummary(
             session_id=session_id,
             task=task,
-            model=model,
+            vision_model=vision_model,
+            action_model=action_model,
             target=target.public_dict(),
             state=SessionState.PLANNING,
             started_at=utc_now_iso(),
         )
         self._write_summary()
-        self.append_event("session_started", {"task": task, "model": model})
+        self.append_event(
+            "session_started",
+            {
+                "task": task,
+                "vision_model": vision_model,
+                "action_model": action_model,
+            },
+        )
         return self.summary
 
     def set_state(

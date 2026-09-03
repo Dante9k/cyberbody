@@ -6,12 +6,16 @@ All notable changes to cyberbody are documented in this file. The format follows
 
 ### Added
 
+- Independent vision and text-action model profiles with separate API URLs and credentials.
+- Structured screenshot perception so the action planner no longer requires image support.
 - GitHub Actions quality, security, dependency-audit, and Windows release workflows.
 - Contributor, security, privacy, architecture, release, and bilingual README documentation.
 - Automated repository privacy audit for high-confidence secrets and personal paths.
 
 ### Changed
 
+- Replaced the coupled native computer-tool loop with one-action-per-observation planning.
+- Migrated legacy single-model configuration to both model roles on first load.
 - Declared x64-safe Win32 function signatures to prevent handle truncation.
 - Strengthened embedded-secret redaction and invalid-config recovery.
 - Restricted authorized owned dialogs to the bound target process.

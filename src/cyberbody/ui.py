@@ -37,9 +37,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .api import OpenAIComputerClient
+from .api import DualModelClient
 from .capture import CaptureService
-from .config import ApiKeyStore, AppConfig
+from .config import ApiKeyStore, AppConfig, is_openai_base_url
 from .controller import AutomationController, ControllerEvents
 from .input import InputExecutor
 from .ipc import LocalCommandServer
@@ -203,7 +203,16 @@ class CyberbodyWindow(QMainWindow):
         self.setMinimumSize(430, 760)
         self.resize(470, 900)
         self.config = AppConfig.load()
-        self.api_key = ApiKeyStore.get()
+        self.vision_api_key = ApiKeyStore.get(
+            "vision",
+            self.config.vision_base_url,
+            include_openai_fallback=is_openai_base_url(self.config.vision_base_url),
+        )
+        self.action_api_key = ApiKeyStore.get(
+            "action",
+            self.config.action_base_url,
+            include_openai_fallback=is_openai_base_url(self.config.action_base_url),
+        )
         self.windows = WindowManager()
         self.store = SessionStore()
         SessionStore.cleanup_expired(self.config.retention_days)
@@ -231,11 +240,14 @@ class CyberbodyWindow(QMainWindow):
             api_status=lambda message: self.bridge.api_status.emit(message),
         )
 
-        def api_factory(callback: Callable[[str], None]) -> OpenAIComputerClient:
-            key = self.api_key or ApiKeyStore.get() or ""
-            return OpenAIComputerClient(
-                key,
-                model=self.config.model,
+        def api_factory(callback: Callable[[str], None]) -> DualModelClient:
+            return DualModelClient(
+                self.vision_api_key or "",
+                self.action_api_key or "",
+                vision_model=self.config.vision_model,
+                action_model=self.config.action_model,
+                vision_base_url=self.config.vision_base_url,
+                action_base_url=self.config.action_base_url,
                 timeout_seconds=self.config.api_timeout_seconds,
                 retries=self.config.api_retries,
                 status_callback=callback,
@@ -286,7 +298,7 @@ class CyberbodyWindow(QMainWindow):
         status_row = QHBoxLayout()
         self.state_badge = QLabel("空闲")
         self.state_badge.setObjectName("StateBadge")
-        self.api_label = QLabel("API：" + ("已配置" if self.api_key else "未配置"))
+        self.api_label = QLabel(self._api_status_text())
         self.api_label.setObjectName("Muted")
         status_row.addWidget(self.state_badge)
         status_row.addStretch()
@@ -319,14 +331,31 @@ class CyberbodyWindow(QMainWindow):
         self.task_edit.setMaximumHeight(110)
         root.addWidget(self.task_edit)
 
-        model_row = QHBoxLayout()
-        model_row.addWidget(QLabel("模型"))
-        self.model_edit = QLineEdit(self.config.model)
-        self.model_edit.setPlaceholderText("gpt-5.6")
-        self.key_button = QPushButton("设置 API 密钥")
-        model_row.addWidget(self.model_edit, 1)
-        model_row.addWidget(self.key_button)
-        root.addLayout(model_row)
+        root.addWidget(self._section_label("3. 配置模型接口"))
+
+        vision_model_row = QHBoxLayout()
+        vision_model_row.addWidget(QLabel("视觉模型"))
+        self.vision_model_edit = QLineEdit(self.config.vision_model)
+        self.vision_model_edit.setPlaceholderText("必须支持图片，例如 gpt-5.6")
+        self.vision_key_button = QPushButton("视觉密钥")
+        vision_model_row.addWidget(self.vision_model_edit, 1)
+        vision_model_row.addWidget(self.vision_key_button)
+        root.addLayout(vision_model_row)
+        self.vision_url_edit = QLineEdit(self.config.vision_base_url)
+        self.vision_url_edit.setPlaceholderText("视觉 API 地址（留空使用 OpenAI）")
+        root.addWidget(self.vision_url_edit)
+
+        action_model_row = QHBoxLayout()
+        action_model_row.addWidget(QLabel("操作模型"))
+        self.action_model_edit = QLineEdit(self.config.action_model)
+        self.action_model_edit.setPlaceholderText("可使用纯文本模型")
+        self.action_key_button = QPushButton("操作密钥")
+        action_model_row.addWidget(self.action_model_edit, 1)
+        action_model_row.addWidget(self.action_key_button)
+        root.addLayout(action_model_row)
+        self.action_url_edit = QLineEdit(self.config.action_base_url)
+        self.action_url_edit.setPlaceholderText("操作 API 地址（留空使用 OpenAI）")
+        root.addWidget(self.action_url_edit)
 
         action_row = QHBoxLayout()
         self.start_button = QPushButton("开始")
@@ -360,7 +389,7 @@ class CyberbodyWindow(QMainWindow):
         self.confirm_frame.hide()
         root.addWidget(self.confirm_frame)
 
-        root.addWidget(self._section_label("3. 实时监管"))
+        root.addWidget(self._section_label("4. 实时监管"))
         self.current_action = QLabel("等待任务")
         self.current_action.setWordWrap(True)
         self.current_action.setObjectName("CurrentAction")
@@ -420,7 +449,8 @@ class CyberbodyWindow(QMainWindow):
         self.pause_button.clicked.connect(self.controller.pause)
         self.resume_button.clicked.connect(self.controller.resume)
         self.stop_button.clicked.connect(self.emergency_stop)
-        self.key_button.clicked.connect(self.configure_api_key)
+        self.vision_key_button.clicked.connect(lambda: self.configure_api_key("vision"))
+        self.action_key_button.clicked.connect(lambda: self.configure_api_key("action"))
         self.export_button.clicked.connect(self.export_session)
         self.clear_button.clicked.connect(self.clear_sessions)
         self.approve_button.clicked.connect(lambda: self.resolve_confirmation(True))
@@ -470,46 +500,88 @@ class CyberbodyWindow(QMainWindow):
         self.on_log("info", f"已绑定窗口：{self.target.title}")
         self._update_buttons()
 
-    def configure_api_key(self) -> None:
+    def configure_api_key(self, role: str) -> None:
+        label = "视觉" if role == "vision" else "操作"
+        base_url = (
+            self.vision_url_edit.text().strip()
+            if role == "vision"
+            else self.action_url_edit.text().strip()
+        )
         value, accepted = QInputDialog.getText(
             self,
-            "设置 OpenAI API 密钥",
-            "密钥将保存到 Windows 凭据管理器；不会写入配置或日志。",
+            f"设置{label} API 密钥",
+            f"密钥仅用于{label}接口，并保存到 Windows 凭据管理器；不会写入配置或日志。",
             QLineEdit.EchoMode.Password,
         )
         if not accepted or not value.strip():
             return
         try:
-            ApiKeyStore.set(value)
-            self.api_key = value.strip()
+            ApiKeyStore.set(role, value, base_url)
+            if role == "vision":
+                self.vision_api_key = value.strip()
+            else:
+                self.action_api_key = value.strip()
         except Exception as exc:
             QMessageBox.critical(self, "保存失败", str(exc))
             return
-        self.api_label.setText("API：已配置")
-        self.on_log("info", "OpenAI API 密钥已安全保存")
+        self.api_label.setText(self._api_status_text())
+        self.on_log("info", f"{label} API 密钥已安全保存")
 
     def start_task(self) -> None:
         if self.target is None:
             QMessageBox.warning(self, "尚未绑定", "请先绑定一个目标窗口。")
             return
-        if not self.api_key:
-            self.configure_api_key()
-            if not self.api_key:
-                return
         task = self.task_edit.toPlainText().strip()
         if not task:
             QMessageBox.warning(self, "任务为空", "请输入自然语言任务。")
             return
-        model = self.model_edit.text().strip() or "gpt-5.6"
-        self.config.model = model
+        vision_model = self.vision_model_edit.text().strip() or "gpt-5.6"
+        action_model = self.action_model_edit.text().strip() or "gpt-5.6"
+        vision_base_url = self.vision_url_edit.text().strip()
+        action_base_url = self.action_url_edit.text().strip()
+        self.config.vision_model = vision_model
+        self.config.action_model = action_model
+        self.config.vision_base_url = vision_base_url
+        self.config.action_base_url = action_base_url
+        try:
+            self.config.validate()
+        except ValueError as exc:
+            QMessageBox.critical(self, "模型接口配置无效", str(exc))
+            return
+        self.vision_api_key = ApiKeyStore.get(
+            "vision",
+            vision_base_url,
+            include_openai_fallback=is_openai_base_url(vision_base_url),
+        )
+        self.action_api_key = ApiKeyStore.get(
+            "action",
+            action_base_url,
+            include_openai_fallback=is_openai_base_url(action_base_url),
+        )
+        if not self.vision_api_key:
+            self.configure_api_key("vision")
+            if not self.vision_api_key:
+                return
+        if not self.action_api_key:
+            self.configure_api_key("action")
+            if not self.action_api_key:
+                return
         try:
             self.config.save()
-            self.controller.start(task, self.target, model)
+            self.controller.start(task, self.target, vision_model, action_model)
         except Exception as exc:
             QMessageBox.critical(self, "无法开始任务", str(exc))
             return
-        self.on_log("info", f"任务已开始，模型：{model}")
+        self.on_log(
+            "info",
+            f"任务已开始，视觉模型：{vision_model}；操作模型：{action_model}",
+        )
         self._update_buttons()
+
+    def _api_status_text(self) -> str:
+        vision = "已配置" if self.vision_api_key else "未配置"
+        action = "已配置" if self.action_api_key else "未配置"
+        return f"API：视觉 {vision} · 操作 {action}"
 
     def emergency_stop(self) -> None:
         if self.confirmation:
