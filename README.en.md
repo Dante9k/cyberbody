@@ -16,17 +16,23 @@
 
 # cyberbody for Windows
 
-cyberbody is a **human-supervised visual automation agent for Windows**. Describe a task, explicitly bind one target window, and let the application run a controlled loop of screenshot, visual perception, text planning, risk inspection, visible preview, input, and observation.
+cyberbody is a **human-supervised Computer Use agent for Windows**. Describe a task, explicitly bind one target window, and let the application run a controlled loop of screenshot, model planning, risk inspection, visible preview, input, and observation.
 
-The agent understands the interface exclusively from **visible pixels**. It does not read UI Automation trees, browser DOMs, or application internals. An image-capable model converts screenshots into structured UI descriptions with coordinates; a separate planner receives text JSON only and proposes the next action. A deterministic local safety layer validates every action before Win32 `SendInput` can execute it.
+Native mode uses the formal Responses API `computer` tool: one multimodal model keeps conversation state, observes screenshots, and returns structured action batches. Dual-model compatibility mode remains available for providers where a vision model must describe the screen for a text-only planner. Both modes share the deterministic local safety gate, window boundary, preview, and Win32 `SendInput` layers.
 
 > [!WARNING]
 > cyberbody is alpha software that sends real keyboard and mouse input. Start with the bundled deterministic test window. Do not use it for payments, production administration, elevated applications, or unattended workflows. It is not a sandbox.
 
+## Relationship to ChatGPT Computer Use
+
+OpenAI does not publish the private ChatGPT Work interface source. cyberbody is redesigned around the documented product behavior and Computer Use API: users can watch progress, pause or take over, approve sensitive actions, and require the model to verify results after UI changes. It is not a copy of ChatGPT's UI or internal code.
+
+The isolation boundary is materially different. ChatGPT Work can use a separate cloud computer or browser profile; this version of cyberbody controls one explicitly bound window on the current Windows desktop. Keep using the deterministic test window or a VM for risky workflows.
+
 ## Highlights
 
 - **One-window authorization:** the task pauses when the target loses focus, moves, minimizes, closes, or changes identity.
-- **Decoupled models:** screenshots go only to the vision endpoint, so the action planner may be text-only.
+- **Two execution engines:** use stateful native Computer Use or a decoupled vision and text-planning pair.
 - **Visible action previews:** click locations and drag paths are highlighted before execution.
 - **Human approval:** destructive, external, financial, permission, upload, and sensitive-data actions stop immediately before impact.
 - **Auditable sessions:** raw screenshots, model-sized screenshots, annotated previews, and JSONL events are retained locally.
@@ -38,9 +44,11 @@ The agent understands the interface exclusively from **visible pixels**. It does
 ```mermaid
 flowchart LR
     T[Task + bound window] --> S[Visible screenshot]
-    S --> C[Vision model]
-    C --> J[Structured UI JSON]
+    S --> M{Execution mode}
+    M -->|native| C[Stateful computer model]
+    M -->|dual| J[Vision model to UI JSON]
     J --> A[Text-only action model]
+    C --> P[Structured action batch]
     A --> P[One proposed action]
     P --> R[Structured risk preflight]
     R --> G[Local safety gate]
@@ -60,9 +68,9 @@ See [docs/architecture.md](docs/architecture.md) for state, coordinate, IPC, and
 
 - Windows 10 22H2 or Windows 11 x64
 - Python 3.12 for source development, or the self-contained portable release
-- Network access and credentials for both configured endpoints
-- An image-capable vision model with JSON Schema output support
-- A text-capable action model with JSON Schema output support
+- Network access and credentials for the selected execution mode
+- Native mode: a Responses API model that supports the formal `computer` tool
+- Dual mode: an image-capable JSON Schema model and a text-capable JSON Schema model
 - A visible, non-elevated target application
 
 Both endpoints use an OpenAI Responses-compatible `/responses` API. Model availability, compatibility, and limits depend on the configured providers.
@@ -93,7 +101,18 @@ Use the crosshair to bind the test window and try:
 
 > Enter “小明” in the name field, drag progress to 80, tick the agreement box, scroll to the bottom, and click Next. Do not click Delete.
 
-## Dual-model endpoints
+## Execution modes
+
+| Mode | Model input | Best fit |
+| --- | --- | --- |
+| Native Computer Use (default) | User task, stateful Responses conversation, current screenshots | Multimodal models with formal `computer` tool support |
+| Dual-model compatibility | Vision model sees screenshots; text planner sees structured UI JSON | Split providers and text-only action models |
+
+Native mode preserves `previous_response_id`, executes each `computer_call.actions` batch, and returns a screenshot as `computer_call_output` with the matching `call_id`. Provider safety checks are not acknowledged until the user approves them in the workspace.
+
+The native credential is read from `CYBERBODY_COMPUTER_API_KEY`, the endpoint-scoped `cyberbody/ComputerAPI/<URL hash>` Windows credential, or `OPENAI_API_KEY` for the default OpenAI endpoint. The default native model is `gpt-5.6-sol`.
+
+### Dual-model compatibility
 
 The supervisor exposes two independent endpoint profiles:
 
@@ -104,7 +123,7 @@ The supervisor exposes two independent endpoint profiles:
 
 Leave an API URL empty to use OpenAI, or enter an HTTPS Responses-compatible endpoint. Local model servers may use loopback HTTP. Models, URLs, and non-secret settings are saved to `config.json`. Third-party credentials are scoped by role and a hash of the API URL, so changing a URL requires entering a key for the new endpoint.
 
-Keys are read from `CYBERBODY_VISION_API_KEY` and `CYBERBODY_ACTION_API_KEY`, or endpoint-scoped `cyberbody/VisionAPI/<URL hash>` and `cyberbody/ActionAPI/<URL hash>` Windows Credential Manager entries. OpenAI endpoints may also use `OPENAI_API_KEY` and the legacy `cyberbody/OpenAI` credential. Keys are never accepted as command-line arguments or written to configuration and session logs.
+Keys are read from `CYBERBODY_COMPUTER_API_KEY`, `CYBERBODY_VISION_API_KEY`, and `CYBERBODY_ACTION_API_KEY`, or endpoint-scoped Windows Credential Manager entries. OpenAI endpoints may also use `OPENAI_API_KEY` and the legacy `cyberbody/OpenAI` credential. Keys are never accepted as command-line arguments or written to configuration and session logs.
 
 Example compatible model split:
 
@@ -148,7 +167,7 @@ The deterministic local policy may always raise the model's risk level. Rejectin
 
 ## Privacy
 
-Screenshots and task-related prompts are sent to the configured vision endpoint. The action endpoint receives the user task, the vision model's text JSON, and recent action history, but not the screenshot. Provider-side handling and retention depend on both services you configure. Local sessions are written to:
+Native mode sends the task, screenshots, and action results to the Computer endpoint. Dual mode sends screenshots to the vision endpoint while the action endpoint receives only task text, UI JSON, and recent action history. Provider-side handling and retention depend on the services you configure. Local sessions are written to:
 
 ```text
 %LOCALAPPDATA%\cyberbody\sessions\<session-id>
@@ -190,7 +209,7 @@ For repository settings, branch protection, naming, and demo preparation, see th
 
 ```text
 src/cyberbody/
-├── api.py          Dual-model perception/planning loop and structured preflight
+├── api.py          Native Computer Use, dual-model loop, and structured preflight
 ├── capture.py      Visible-pixel capture and model scaling
 ├── controller.py   State machine, limits, and worker thread
 ├── input.py        Win32 SendInput and Unicode typing
@@ -212,6 +231,8 @@ Please report vulnerabilities privately. Do not publish real credentials, person
 ## References
 
 - [OpenAI Responses API](https://developers.openai.com/api/reference/resources/responses)
+- [OpenAI Computer use](https://developers.openai.com/api/docs/guides/tools-computer-use)
+- [ChatGPT browser and computer use](https://learn.chatgpt.com/docs/browser)
 - [OpenAI image inputs](https://developers.openai.com/api/docs/guides/images-vision)
 - [OpenAI structured outputs](https://developers.openai.com/api/docs/guides/structured-outputs)
 - [DeepSeek Vision](https://api-docs.deepseek.com/guides/vision/)

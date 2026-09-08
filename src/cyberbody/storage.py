@@ -31,6 +31,7 @@ class SessionStore:
         vision_model: str,
         action_model: str,
         target: TargetWindow,
+        execution_mode: str = "dual",
     ) -> SessionSummary:
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         session_id = f"{timestamp}-{uuid.uuid4().hex[:8]}"
@@ -44,6 +45,7 @@ class SessionStore:
             target=target.public_dict(),
             state=SessionState.PLANNING,
             started_at=utc_now_iso(),
+            execution_mode=execution_mode,
         )
         self._write_summary()
         self.append_event(
@@ -52,6 +54,7 @@ class SessionStore:
                 "task": task,
                 "vision_model": vision_model,
                 "action_model": action_model,
+                "execution_mode": execution_mode,
             },
         )
         return self.summary

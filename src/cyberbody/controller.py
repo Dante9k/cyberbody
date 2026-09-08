@@ -5,7 +5,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from .api import ApiStopped, DualModelClient, PlanningBlocked, UnsafeScreenContent
+from .api import ApiStopped, ComputerAgentClient, PlanningBlocked, UnsafeScreenContent
 from .capture import CaptureService, load_frame_image
 from .input import ActionExecutionError, InputExecutor
 from .models import (
@@ -42,7 +42,7 @@ class AutomationController:
         capture: CaptureService,
         executor: InputExecutor,
         safety: SafetyGate,
-        api_factory: Callable[[Callable[[str], None]], DualModelClient],
+        api_factory: Callable[[Callable[[str], None]], ComputerAgentClient],
         events: ControllerEvents | None = None,
         *,
         max_actions: int = 50,
@@ -78,6 +78,7 @@ class AutomationController:
         target: TargetWindow,
         vision_model: str,
         action_model: str,
+        execution_mode: str = "dual",
     ) -> None:
         if self.is_running:
             raise RuntimeError("已有任务正在运行")
@@ -91,7 +92,13 @@ class AutomationController:
         self.target = target
         self._stop.clear()
         self._run_gate.set()
-        self.store.start(normalized, vision_model, action_model, target)
+        self.store.start(
+            normalized,
+            vision_model,
+            action_model,
+            target,
+            execution_mode=execution_mode,
+        )
         self._thread = threading.Thread(
             target=self._run,
             name="cyberbody-automation",
@@ -196,6 +203,9 @@ class AutomationController:
                         if not approved:
                             self._finish(SessionState.STOPPED, "用户拒绝了风险操作")
                             return
+                        acknowledge = getattr(api, "acknowledge_safety_checks", None)
+                        if callable(acknowledge):
+                            acknowledge()
                         self.windows.activate(self.target)
                         time.sleep(0.15)
                         if handoff:
@@ -302,7 +312,7 @@ class AutomationController:
 
     def _inspect_and_classify(
         self,
-        api: DualModelClient,
+        api: ComputerAgentClient,
         action: ComputerAction,
         frame: CaptureFrame,
     ) -> ActionProposal:

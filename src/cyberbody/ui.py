@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-import html
 import os
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
@@ -28,16 +29,20 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPushButton,
     QSizePolicy,
+    QSplitter,
+    QStackedWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
-from .api import DualModelClient
+from .api import ComputerAgentClient, DualModelClient, NativeComputerClient
 from .capture import CaptureService
 from .config import ApiKeyStore, AppConfig, is_openai_base_url
 from .controller import AutomationController, ControllerEvents
@@ -196,13 +201,130 @@ class WindowPickerOverlay(QWidget):
         )
 
 
+class LiveViewport(QFrame):
+    """A supervised live view with an in-panel action preview."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setObjectName("LiveViewport")
+        self.setMinimumSize(520, 360)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._pixmap = QPixmap()
+        self._frame: CaptureFrame | None = None
+        self._proposal: ActionProposal | None = None
+        self._status = "等待绑定目标窗口"
+
+    def set_frame(self, frame: CaptureFrame) -> None:
+        if frame.model_path:
+            self._pixmap = QPixmap(str(frame.model_path))
+        self._frame = frame
+        self.update()
+
+    def set_proposal(self, proposal: ActionProposal | None) -> None:
+        self._proposal = proposal
+        self.update()
+
+    def set_status(self, status: str) -> None:
+        self._status = status
+        self.update()
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        bounds = self.rect().adjusted(18, 18, -18, -18)
+        if self._pixmap.isNull():
+            painter.setPen(QColor("#737986"))
+            painter.drawText(bounds, Qt.AlignmentFlag.AlignCenter, self._status)
+            return
+
+        scaled = self._pixmap.scaled(
+            bounds.size(),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        image_rect = QRect(
+            bounds.center().x() - scaled.width() // 2,
+            bounds.center().y() - scaled.height() // 2,
+            scaled.width(),
+            scaled.height(),
+        )
+        painter.drawPixmap(image_rect, scaled)
+        painter.setPen(QPen(QColor("#343740"), 1))
+        painter.drawRect(image_rect)
+
+        badge = QRect(image_rect.left() + 14, image_rect.top() + 14, 116, 30)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(8, 10, 14, 218))
+        painter.drawRoundedRect(badge, 15, 15)
+        painter.setBrush(QColor("#52d6a3"))
+        painter.drawEllipse(badge.left() + 12, badge.center().y() - 4, 8, 8)
+        painter.setPen(QColor("#eef1f6"))
+        painter.drawText(
+            badge.adjusted(28, 0, -8, 0),
+            Qt.AlignmentFlag.AlignVCenter,
+            "LIVE VIEW",
+        )
+
+        if not self._proposal or not self._frame:
+            return
+        points = self._proposal.action.model_points()
+        mapped = [
+            QPoint(
+                image_rect.left() + round(float(x) * image_rect.width() / self._frame.model_width),
+                image_rect.top() + round(float(y) * image_rect.height() / self._frame.model_height),
+            )
+            for x, y in points
+        ]
+        if self._proposal.action.type == "drag" and len(mapped) >= 2:
+            painter.setPen(QPen(QColor(255, 180, 76, 225), 4))
+            for start, end in pairwise(mapped):
+                painter.drawLine(start, end)
+        painter.setPen(QPen(QColor(255, 99, 122, 240), 4))
+        for point in mapped:
+            painter.drawEllipse(point, 13, 13)
+            painter.drawLine(point.x() - 19, point.y(), point.x() + 19, point.y())
+            painter.drawLine(point.x(), point.y() - 19, point.x(), point.y() + 19)
+
+
+class ActivityTimeline(QListWidget):
+    def __init__(self) -> None:
+        super().__init__()
+        self.setObjectName("ActivityTimeline")
+        self.setAlternatingRowColors(False)
+        self.setWordWrap(True)
+        self.setSpacing(4)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+    def add_event(self, level: str, message: str) -> None:
+        palette = {
+            "warning": "#ffc56e",
+            "error": "#ff7d91",
+            "state": "#8eb9ff",
+            "success": "#70dfa9",
+        }
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        item = QListWidgetItem(f"{timestamp}   {message}")
+        item.setForeground(QColor(palette.get(level, "#b6bac5")))
+        item.setToolTip(message)
+        self.addItem(item)
+        while self.count() > 200:
+            self.takeItem(0)
+        self.scrollToBottom()
+
+
 class CyberbodyWindow(QMainWindow):
     def __init__(self, initial_task: str = "") -> None:
         super().__init__()
-        self.setWindowTitle("cyberbody · 可视化操作监管")
-        self.setMinimumSize(430, 760)
-        self.resize(470, 900)
+        self.setWindowTitle("cyberbody · Agent Workspace")
+        self.setMinimumSize(1040, 700)
+        self.resize(1320, 820)
         self.config = AppConfig.load()
+        self.computer_api_key = ApiKeyStore.get(
+            "computer",
+            self.config.computer_base_url,
+            include_openai_fallback=is_openai_base_url(self.config.computer_base_url),
+        )
         self.vision_api_key = ApiKeyStore.get(
             "vision",
             self.config.vision_base_url,
@@ -240,7 +362,16 @@ class CyberbodyWindow(QMainWindow):
             api_status=lambda message: self.bridge.api_status.emit(message),
         )
 
-        def api_factory(callback: Callable[[str], None]) -> DualModelClient:
+        def api_factory(callback: Callable[[str], None]) -> ComputerAgentClient:
+            if self.config.execution_mode == "native":
+                return NativeComputerClient(
+                    self.computer_api_key or "",
+                    model=self.config.computer_model,
+                    base_url=self.config.computer_base_url,
+                    timeout_seconds=self.config.api_timeout_seconds,
+                    retries=self.config.api_retries,
+                    status_callback=callback,
+                )
             return DualModelClient(
                 self.vision_api_key or "",
                 self.action_api_key or "",
@@ -284,81 +415,88 @@ class CyberbodyWindow(QMainWindow):
 
     def _build_ui(self, initial_task: str) -> None:
         central = QWidget()
-        root = QVBoxLayout(central)
-        root.setContentsMargins(18, 16, 18, 16)
-        root.setSpacing(12)
+        central.setObjectName("AppRoot")
+        page = QVBoxLayout(central)
+        page.setContentsMargins(20, 16, 20, 20)
+        page.setSpacing(14)
 
-        title = QLabel("cyberbody")
-        title.setObjectName("Title")
-        subtitle = QLabel("观察屏幕，规划动作，并在你的监管下操作")
-        subtitle.setObjectName("Subtitle")
-        root.addWidget(title)
-        root.addWidget(subtitle)
-
-        status_row = QHBoxLayout()
+        header = QHBoxLayout()
+        brand = QVBoxLayout()
+        brand.setSpacing(1)
+        title = QLabel("CYBERBODY")
+        title.setObjectName("Brand")
+        subtitle = QLabel("Supervised computer agent workspace")
+        subtitle.setObjectName("Muted")
+        brand.addWidget(title)
+        brand.addWidget(subtitle)
+        header.addLayout(brand)
+        header.addStretch()
         self.state_badge = QLabel("空闲")
         self.state_badge.setObjectName("StateBadge")
+        self.step_label = QLabel("0 个动作  ·  0 轮观察")
+        self.step_label.setObjectName("HeaderMeta")
         self.api_label = QLabel(self._api_status_text())
-        self.api_label.setObjectName("Muted")
-        status_row.addWidget(self.state_badge)
-        status_row.addStretch()
-        status_row.addWidget(self.api_label)
-        root.addLayout(status_row)
+        self.api_label.setObjectName("HeaderMeta")
+        header.addWidget(self.step_label)
+        header.addWidget(self.api_label)
+        header.addWidget(self.state_badge)
+        page.addLayout(header)
 
-        root.addWidget(self._section_label("1. 绑定目标窗口"))
+        outer = QSplitter(Qt.Orientation.Horizontal)
+        outer.setChildrenCollapsible(False)
+
+        control_panel = QFrame()
+        control_panel.setObjectName("ControlPanel")
+        control_panel.setMinimumWidth(330)
+        control_panel.setMaximumWidth(410)
+        controls = QVBoxLayout(control_panel)
+        controls.setContentsMargins(18, 18, 18, 18)
+        controls.setSpacing(12)
+
+        controls.addWidget(self._section_label("执行引擎"))
+        self.mode_combo = QComboBox()
+        self.mode_combo.setObjectName("ModeSelector")
+        self.mode_combo.addItem("原生 Computer Use · 推荐", "native")
+        self.mode_combo.addItem("双模型兼容 · Vision + Text", "dual")
+        mode_index = self.mode_combo.findData(self.config.execution_mode)
+        self.mode_combo.setCurrentIndex(max(0, mode_index))
+        controls.addWidget(self.mode_combo)
+        self.mode_description = QLabel()
+        self.mode_description.setObjectName("Muted")
+        self.mode_description.setWordWrap(True)
+        controls.addWidget(self.mode_description)
+
+        controls.addWidget(self._section_label("目标窗口"))
         window_row = QHBoxLayout()
         self.window_combo = QComboBox()
         self.window_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.refresh_button = QPushButton("刷新")
+        self.refresh_button.setObjectName("Quiet")
         self.bind_button = QPushButton("绑定")
         window_row.addWidget(self.window_combo, 1)
         window_row.addWidget(self.refresh_button)
         window_row.addWidget(self.bind_button)
-        root.addLayout(window_row)
-        self.pick_button = QPushButton("⌖  十字准星选择窗口")
-        root.addWidget(self.pick_button)
+        controls.addLayout(window_row)
+        self.pick_button = QPushButton("⌖  在桌面上选择窗口")
+        self.pick_button.setObjectName("Secondary")
+        controls.addWidget(self.pick_button)
         self.target_label = QLabel("尚未绑定窗口")
-        self.target_label.setObjectName("Muted")
+        self.target_label.setObjectName("TargetCard")
         self.target_label.setWordWrap(True)
-        root.addWidget(self.target_label)
+        controls.addWidget(self.target_label)
 
-        root.addWidget(self._section_label("2. 描述任务"))
+        controls.addWidget(self._section_label("任务"))
         self.task_edit = QTextEdit()
         self.task_edit.setPlaceholderText(
-            "例如：在当前窗口搜索“季度报告”，打开第一条结果，但不要发送或删除任何内容。"
+            "描述最终结果和边界。例如：在当前窗口搜索“季度报告”，打开第一条结果，但不要发送或删除任何内容。"
         )
         self.task_edit.setPlainText(initial_task)
-        self.task_edit.setMaximumHeight(110)
-        root.addWidget(self.task_edit)
-
-        root.addWidget(self._section_label("3. 配置模型接口"))
-
-        vision_model_row = QHBoxLayout()
-        vision_model_row.addWidget(QLabel("视觉模型"))
-        self.vision_model_edit = QLineEdit(self.config.vision_model)
-        self.vision_model_edit.setPlaceholderText("必须支持图片，例如 gpt-5.6")
-        self.vision_key_button = QPushButton("视觉密钥")
-        vision_model_row.addWidget(self.vision_model_edit, 1)
-        vision_model_row.addWidget(self.vision_key_button)
-        root.addLayout(vision_model_row)
-        self.vision_url_edit = QLineEdit(self.config.vision_base_url)
-        self.vision_url_edit.setPlaceholderText("视觉 API 地址（留空使用 OpenAI）")
-        root.addWidget(self.vision_url_edit)
-
-        action_model_row = QHBoxLayout()
-        action_model_row.addWidget(QLabel("操作模型"))
-        self.action_model_edit = QLineEdit(self.config.action_model)
-        self.action_model_edit.setPlaceholderText("可使用纯文本模型")
-        self.action_key_button = QPushButton("操作密钥")
-        action_model_row.addWidget(self.action_model_edit, 1)
-        action_model_row.addWidget(self.action_key_button)
-        root.addLayout(action_model_row)
-        self.action_url_edit = QLineEdit(self.config.action_base_url)
-        self.action_url_edit.setPlaceholderText("操作 API 地址（留空使用 OpenAI）")
-        root.addWidget(self.action_url_edit)
+        self.task_edit.setMinimumHeight(108)
+        self.task_edit.setMaximumHeight(150)
+        controls.addWidget(self.task_edit)
 
         action_row = QHBoxLayout()
-        self.start_button = QPushButton("开始")
+        self.start_button = QPushButton("▶  开始运行")
         self.start_button.setObjectName("Primary")
         self.pause_button = QPushButton("暂停")
         self.resume_button = QPushButton("继续")
@@ -368,7 +506,103 @@ class CyberbodyWindow(QMainWindow):
         action_row.addWidget(self.pause_button)
         action_row.addWidget(self.resume_button)
         action_row.addWidget(self.stop_button)
-        root.addLayout(action_row)
+        controls.addLayout(action_row)
+
+        controls.addWidget(self._section_label("模型连接"))
+        self.settings_stack = QStackedWidget()
+
+        native_page = QWidget()
+        native_layout = QVBoxLayout(native_page)
+        native_layout.setContentsMargins(0, 0, 0, 0)
+        native_layout.setSpacing(8)
+        computer_model_row = QHBoxLayout()
+        self.computer_model_edit = QLineEdit(self.config.computer_model)
+        self.computer_model_edit.setPlaceholderText("例如 gpt-5.6-sol")
+        self.computer_key_button = QPushButton("设置密钥")
+        computer_model_row.addWidget(self.computer_model_edit, 1)
+        computer_model_row.addWidget(self.computer_key_button)
+        native_layout.addLayout(computer_model_row)
+        self.computer_url_edit = QLineEdit(self.config.computer_base_url)
+        self.computer_url_edit.setPlaceholderText("Computer API 地址（留空使用 OpenAI）")
+        native_layout.addWidget(self.computer_url_edit)
+        native_note = QLabel("模型必须支持 Responses API 的正式版 computer 工具。")
+        native_note.setObjectName("Muted")
+        native_note.setWordWrap(True)
+        native_layout.addWidget(native_note)
+        self.settings_stack.addWidget(native_page)
+
+        dual_page = QWidget()
+        dual_layout = QVBoxLayout(dual_page)
+        dual_layout.setContentsMargins(0, 0, 0, 0)
+        dual_layout.setSpacing(8)
+
+        vision_model_row = QHBoxLayout()
+        self.vision_model_edit = QLineEdit(self.config.vision_model)
+        self.vision_model_edit.setPlaceholderText("视觉模型 · 必须支持图片")
+        self.vision_key_button = QPushButton("视觉密钥")
+        vision_model_row.addWidget(self.vision_model_edit, 1)
+        vision_model_row.addWidget(self.vision_key_button)
+        dual_layout.addLayout(vision_model_row)
+        self.vision_url_edit = QLineEdit(self.config.vision_base_url)
+        self.vision_url_edit.setPlaceholderText("视觉 API 地址（留空使用 OpenAI）")
+        dual_layout.addWidget(self.vision_url_edit)
+
+        action_model_row = QHBoxLayout()
+        self.action_model_edit = QLineEdit(self.config.action_model)
+        self.action_model_edit.setPlaceholderText("操作模型 · 可以是纯文本模型")
+        self.action_key_button = QPushButton("操作密钥")
+        action_model_row.addWidget(self.action_model_edit, 1)
+        action_model_row.addWidget(self.action_key_button)
+        dual_layout.addLayout(action_model_row)
+        self.action_url_edit = QLineEdit(self.config.action_base_url)
+        self.action_url_edit.setPlaceholderText("操作 API 地址（留空使用 OpenAI）")
+        dual_layout.addWidget(self.action_url_edit)
+        self.settings_stack.addWidget(dual_page)
+        controls.addWidget(self.settings_stack)
+        controls.addStretch()
+
+        emergency = QLabel("紧急停止  Ctrl + Shift + F12")
+        emergency.setObjectName("EmergencyHint")
+        emergency.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        controls.addWidget(emergency)
+        outer.addWidget(control_panel)
+
+        workspace = QFrame()
+        workspace.setObjectName("Workspace")
+        workspace_layout = QVBoxLayout(workspace)
+        workspace_layout.setContentsMargins(18, 18, 18, 18)
+        workspace_layout.setSpacing(12)
+
+        workspace_header = QHBoxLayout()
+        workspace_titles = QVBoxLayout()
+        workspace_titles.setSpacing(1)
+        workspace_title = QLabel("Live workspace")
+        workspace_title.setObjectName("WorkspaceTitle")
+        workspace_subtitle = QLabel("每一步都可见、可暂停、可接管")
+        workspace_subtitle.setObjectName("Muted")
+        workspace_titles.addWidget(workspace_title)
+        workspace_titles.addWidget(workspace_subtitle)
+        workspace_header.addLayout(workspace_titles)
+        workspace_header.addStretch()
+        self.engine_badge = QLabel()
+        self.engine_badge.setObjectName("EngineBadge")
+        workspace_header.addWidget(self.engine_badge)
+        workspace_layout.addLayout(workspace_header)
+
+        content = QSplitter(Qt.Orientation.Horizontal)
+        content.setChildrenCollapsible(False)
+        live_column = QFrame()
+        live_column.setObjectName("LiveColumn")
+        live_layout = QVBoxLayout(live_column)
+        live_layout.setContentsMargins(0, 0, 0, 0)
+        live_layout.setSpacing(10)
+        self.viewport = LiveViewport()
+        live_layout.addWidget(self.viewport, 1)
+
+        self.current_action = QLabel("等待任务。绑定一个普通权限窗口，然后描述目标结果。")
+        self.current_action.setWordWrap(True)
+        self.current_action.setObjectName("CurrentAction")
+        live_layout.addWidget(self.current_action)
 
         self.confirm_frame = QFrame()
         self.confirm_frame.setObjectName("ConfirmCard")
@@ -387,61 +621,93 @@ class CyberbodyWindow(QMainWindow):
         confirm_layout.addWidget(self.confirm_text)
         confirm_layout.addLayout(confirm_buttons)
         self.confirm_frame.hide()
-        root.addWidget(self.confirm_frame)
+        live_layout.addWidget(self.confirm_frame)
+        content.addWidget(live_column)
 
-        root.addWidget(self._section_label("4. 实时监管"))
-        self.current_action = QLabel("等待任务")
-        self.current_action.setWordWrap(True)
-        self.current_action.setObjectName("CurrentAction")
-        root.addWidget(self.current_action)
-        self.preview = QLabel("截图将在这里显示")
-        self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.preview.setMinimumHeight(170)
-        self.preview.setMaximumHeight(230)
-        self.preview.setObjectName("Preview")
-        root.addWidget(self.preview)
-
-        self.log = QTextEdit()
-        self.log.setReadOnly(True)
-        self.log.setMaximumHeight(150)
-        root.addWidget(self.log)
-
-        footer = QHBoxLayout()
+        activity_panel = QFrame()
+        activity_panel.setObjectName("ActivityPanel")
+        activity_panel.setMinimumWidth(260)
+        activity_panel.setMaximumWidth(360)
+        activity_layout = QVBoxLayout(activity_panel)
+        activity_layout.setContentsMargins(14, 14, 14, 14)
+        activity_layout.setSpacing(10)
+        activity_title = QLabel("Activity")
+        activity_title.setObjectName("PanelTitle")
+        activity_layout.addWidget(activity_title)
+        activity_hint = QLabel("状态、观察和安全裁决会记录在这里")
+        activity_hint.setObjectName("Muted")
+        activity_hint.setWordWrap(True)
+        activity_layout.addWidget(activity_hint)
+        self.activity = ActivityTimeline()
+        activity_layout.addWidget(self.activity, 1)
         self.export_button = QPushButton("导出本次会话")
         self.clear_button = QPushButton("清除全部留档")
-        footer.addWidget(self.export_button)
-        footer.addWidget(self.clear_button)
-        root.addLayout(footer)
-        root.addWidget(QLabel("紧急停止：Ctrl + Shift + F12"))
+        activity_layout.addWidget(self.export_button)
+        activity_layout.addWidget(self.clear_button)
+        content.addWidget(activity_panel)
+        content.setSizes([720, 290])
+        workspace_layout.addWidget(content, 1)
+        outer.addWidget(workspace)
+        outer.setStretchFactor(0, 0)
+        outer.setStretchFactor(1, 1)
+        outer.setSizes([360, 920])
+        page.addWidget(outer, 1)
 
         self.setCentralWidget(central)
         self.setStyleSheet(
             """
-            QMainWindow, QWidget { background: #0f172a; color: #e5edf8; font-size: 13px; }
-            QLabel#Title { font-size: 26px; font-weight: 700; color: #f8fbff; }
-            QLabel#Subtitle, QLabel#Muted { color: #91a4bd; }
-            QLabel#StateBadge { background: #19324f; color: #75d7ff; border-radius: 12px; padding: 5px 10px; font-weight: 600; }
-            QLabel#CurrentAction { background: #17243a; border: 1px solid #29405e; border-radius: 8px; padding: 10px; }
-            QLabel#Preview { background: #0b1220; border: 1px solid #263950; border-radius: 8px; color: #6f829c; }
-            QLineEdit, QTextEdit, QComboBox { background: #111d30; border: 1px solid #304761; border-radius: 6px; padding: 7px; selection-background-color: #177ddc; }
-            QPushButton { background: #223651; border: 1px solid #36516f; border-radius: 6px; padding: 7px 10px; }
-            QPushButton:hover { background: #2b4465; }
-            QPushButton:disabled { color: #66758a; background: #172236; }
-            QPushButton#Primary { background: #1473e6; border-color: #2587f4; font-weight: 600; }
-            QPushButton#Danger { color: #ffb1b1; border-color: #73404b; }
-            QFrame#ConfirmCard { background: #352815; border: 1px solid #a87426; border-radius: 8px; }
-            QLabel#ConfirmTitle { color: #ffd68a; font-weight: 700; }
+            QMainWindow, QWidget#AppRoot { background: #0b0c0f; color: #eceef3; font-size: 13px; }
+            QWidget { font-family: "Segoe UI"; }
+            QLabel#Brand { color: #f7f8fb; font-size: 21px; font-weight: 800; letter-spacing: 2px; }
+            QLabel#Muted, QLabel#HeaderMeta { color: #858b98; }
+            QLabel#HeaderMeta { padding: 0 7px; }
+            QLabel#StateBadge { background: #17372d; color: #72e4b2; border: 1px solid #285946; border-radius: 14px; padding: 6px 12px; font-weight: 700; }
+            QFrame#ControlPanel, QFrame#Workspace { background: #121318; border: 1px solid #24262e; border-radius: 14px; }
+            QFrame#ActivityPanel { background: #0f1014; border: 1px solid #24262e; border-radius: 11px; }
+            QLabel#WorkspaceTitle { font-size: 19px; font-weight: 750; }
+            QLabel#PanelTitle { font-size: 15px; font-weight: 700; }
+            QLabel#EngineBadge { background: #25213a; color: #b9a9ff; border: 1px solid #443a71; border-radius: 12px; padding: 5px 10px; }
+            QLabel#TargetCard { background: #0e0f13; color: #afb4c0; border: 1px solid #272a32; border-radius: 9px; padding: 10px; }
+            QLabel#CurrentAction { background: #171921; border: 1px solid #2b2e39; border-radius: 10px; padding: 12px; color: #dfe2e9; }
+            QLabel#EmergencyHint { color: #ef9aa8; background: #23161a; border: 1px solid #4f2931; border-radius: 8px; padding: 8px; }
+            QFrame#LiveViewport { background: #090a0d; border: 1px solid #2b2d35; border-radius: 11px; }
+            QLineEdit, QTextEdit, QComboBox { background: #0d0e12; color: #edf0f5; border: 1px solid #30333d; border-radius: 8px; padding: 8px; selection-background-color: #7258d8; }
+            QLineEdit:focus, QTextEdit:focus, QComboBox:focus { border-color: #7c67d9; }
+            QComboBox#ModeSelector { background: #1b1828; border-color: #3e365d; font-weight: 650; }
+            QPushButton { background: #1c1e25; color: #e4e6eb; border: 1px solid #343741; border-radius: 8px; padding: 8px 11px; }
+            QPushButton:hover { background: #292c35; border-color: #4a4e5b; }
+            QPushButton:pressed { background: #15161b; }
+            QPushButton:disabled { color: #5d616c; background: #15161a; border-color: #24262c; }
+            QPushButton#Primary { background: #7a5ee6; border-color: #9079ef; color: white; font-weight: 750; }
+            QPushButton#Primary:hover { background: #886eed; }
+            QPushButton#Secondary { background: #171922; border-color: #36394a; }
+            QPushButton#Quiet { padding-left: 7px; padding-right: 7px; }
+            QPushButton#Danger { color: #ff9baa; background: #24171b; border-color: #553039; }
+            QFrame#ConfirmCard { background: #2a2113; border: 1px solid #7d5924; border-radius: 10px; }
+            QLabel#ConfirmTitle { color: #ffd38a; font-size: 15px; font-weight: 750; }
+            QListWidget#ActivityTimeline { background: transparent; border: 0; outline: 0; }
+            QListWidget#ActivityTimeline::item { background: #15161b; border: 1px solid #24262e; border-radius: 7px; padding: 8px; margin-bottom: 2px; }
+            QListWidget#ActivityTimeline::item:selected { background: #232033; border-color: #4a416d; }
+            QSplitter::handle { background: transparent; width: 8px; }
+            QScrollBar:vertical { background: transparent; width: 8px; margin: 2px; }
+            QScrollBar::handle:vertical { background: #353843; border-radius: 4px; min-height: 24px; }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
             """
         )
+        self._sync_mode_ui()
         self._update_buttons()
 
     @staticmethod
     def _section_label(text: str) -> QLabel:
         label = QLabel(text)
-        label.setStyleSheet("font-weight: 650; color: #cbd8e8; margin-top: 4px;")
+        label.setStyleSheet(
+            "font-size: 11px; font-weight: 700; color: #8e94a2; margin-top: 3px;"
+            "letter-spacing: 1px;"
+        )
         return label
 
     def _connect_signals(self) -> None:
+        self.mode_combo.currentIndexChanged.connect(self._sync_mode_ui)
         self.refresh_button.clicked.connect(self.refresh_windows)
         self.bind_button.clicked.connect(self.bind_selected_window)
         self.pick_button.clicked.connect(self.start_picker)
@@ -449,6 +715,7 @@ class CyberbodyWindow(QMainWindow):
         self.pause_button.clicked.connect(self.controller.pause)
         self.resume_button.clicked.connect(self.controller.resume)
         self.stop_button.clicked.connect(self.emergency_stop)
+        self.computer_key_button.clicked.connect(lambda: self.configure_api_key("computer"))
         self.vision_key_button.clicked.connect(lambda: self.configure_api_key("vision"))
         self.action_key_button.clicked.connect(lambda: self.configure_api_key("action"))
         self.export_button.clicked.connect(self.export_session)
@@ -463,6 +730,18 @@ class CyberbodyWindow(QMainWindow):
         self.bridge.confirmation_requested.connect(self.on_confirmation)
         self.bridge.finished.connect(self.on_finished)
         self.bridge.api_status.connect(self.api_label.setText)
+
+    def _sync_mode_ui(self) -> None:
+        mode = str(self.mode_combo.currentData() or "native")
+        native = mode == "native"
+        self.settings_stack.setCurrentIndex(0 if native else 1)
+        self.mode_description.setText(
+            "一个支持 computer 工具的模型持续观察、规划和自我校正。"
+            if native
+            else "视觉模型读取截图，纯文本模型根据结构化观察规划动作。"
+        )
+        self.engine_badge.setText("NATIVE COMPUTER" if native else "DUAL MODEL")
+        self.api_label.setText(self._api_status_text())
 
     def refresh_windows(self) -> None:
         selected_hwnd = self.window_combo.currentData()
@@ -497,16 +776,19 @@ class CyberbodyWindow(QMainWindow):
         self.target_label.setText(
             f"已绑定：{self.target.title}\nPID {self.target.pid} · {self.target.client_rect.width}×{self.target.client_rect.height} · DPI {self.target.dpi}"
         )
+        self.viewport.set_status("目标窗口已绑定，等待开始任务")
         self.on_log("info", f"已绑定窗口：{self.target.title}")
         self._update_buttons()
 
     def configure_api_key(self, role: str) -> None:
-        label = "视觉" if role == "vision" else "操作"
-        base_url = (
-            self.vision_url_edit.text().strip()
-            if role == "vision"
-            else self.action_url_edit.text().strip()
-        )
+        labels = {"computer": "Computer", "vision": "视觉", "action": "操作"}
+        label = labels[role]
+        base_urls = {
+            "computer": self.computer_url_edit.text().strip(),
+            "vision": self.vision_url_edit.text().strip(),
+            "action": self.action_url_edit.text().strip(),
+        }
+        base_url = base_urls[role]
         value, accepted = QInputDialog.getText(
             self,
             f"设置{label} API 密钥",
@@ -517,7 +799,9 @@ class CyberbodyWindow(QMainWindow):
             return
         try:
             ApiKeyStore.set(role, value, base_url)
-            if role == "vision":
+            if role == "computer":
+                self.computer_api_key = value.strip()
+            elif role == "vision":
                 self.vision_api_key = value.strip()
             else:
                 self.action_api_key = value.strip()
@@ -535,10 +819,16 @@ class CyberbodyWindow(QMainWindow):
         if not task:
             QMessageBox.warning(self, "任务为空", "请输入自然语言任务。")
             return
+        mode = str(self.mode_combo.currentData() or "native")
+        computer_model = self.computer_model_edit.text().strip() or "gpt-5.6-sol"
+        computer_base_url = self.computer_url_edit.text().strip()
         vision_model = self.vision_model_edit.text().strip() or "gpt-5.6"
         action_model = self.action_model_edit.text().strip() or "gpt-5.6"
         vision_base_url = self.vision_url_edit.text().strip()
         action_base_url = self.action_url_edit.text().strip()
+        self.config.execution_mode = mode
+        self.config.computer_model = computer_model
+        self.config.computer_base_url = computer_base_url
         self.config.vision_model = vision_model
         self.config.action_model = action_model
         self.config.vision_base_url = vision_base_url
@@ -548,37 +838,72 @@ class CyberbodyWindow(QMainWindow):
         except ValueError as exc:
             QMessageBox.critical(self, "模型接口配置无效", str(exc))
             return
-        self.vision_api_key = ApiKeyStore.get(
-            "vision",
-            vision_base_url,
-            include_openai_fallback=is_openai_base_url(vision_base_url),
-        )
-        self.action_api_key = ApiKeyStore.get(
-            "action",
-            action_base_url,
-            include_openai_fallback=is_openai_base_url(action_base_url),
-        )
-        if not self.vision_api_key:
-            self.configure_api_key("vision")
+        if mode == "native":
+            self.computer_api_key = ApiKeyStore.get(
+                "computer",
+                computer_base_url,
+                include_openai_fallback=is_openai_base_url(computer_base_url),
+            )
+            if not self.computer_api_key:
+                self.configure_api_key("computer")
+                if not self.computer_api_key:
+                    return
+        else:
+            self.vision_api_key = ApiKeyStore.get(
+                "vision",
+                vision_base_url,
+                include_openai_fallback=is_openai_base_url(vision_base_url),
+            )
+            self.action_api_key = ApiKeyStore.get(
+                "action",
+                action_base_url,
+                include_openai_fallback=is_openai_base_url(action_base_url),
+            )
             if not self.vision_api_key:
-                return
-        if not self.action_api_key:
-            self.configure_api_key("action")
+                self.configure_api_key("vision")
+                if not self.vision_api_key:
+                    return
             if not self.action_api_key:
-                return
+                self.configure_api_key("action")
+                if not self.action_api_key:
+                    return
         try:
             self.config.save()
-            self.controller.start(task, self.target, vision_model, action_model)
+            if mode == "native":
+                self.controller.start(
+                    task,
+                    self.target,
+                    computer_model,
+                    computer_model,
+                    execution_mode=mode,
+                )
+            else:
+                self.controller.start(
+                    task,
+                    self.target,
+                    vision_model,
+                    action_model,
+                    execution_mode=mode,
+                )
         except Exception as exc:
             QMessageBox.critical(self, "无法开始任务", str(exc))
             return
-        self.on_log(
-            "info",
-            f"任务已开始，视觉模型：{vision_model}；操作模型：{action_model}",
+        model_summary = (
+            f"Computer 模型：{computer_model}"
+            if mode == "native"
+            else f"视觉模型：{vision_model}；操作模型：{action_model}"
         )
+        self.on_log("info", f"任务已开始，{model_summary}")
         self._update_buttons()
 
     def _api_status_text(self) -> str:
+        mode_combo = getattr(self, "mode_combo", None)
+        mode = (
+            str(mode_combo.currentData()) if mode_combo is not None else self.config.execution_mode
+        )
+        if mode == "native":
+            computer = "已配置" if self.computer_api_key else "未配置"
+            return f"Computer API {computer}"
         vision = "已配置" if self.vision_api_key else "未配置"
         action = "已配置" if self.action_api_key else "未配置"
         return f"API：视觉 {vision} · 操作 {action}"
@@ -635,37 +960,42 @@ class CyberbodyWindow(QMainWindow):
         }
         self.state_badge.setText(labels.get(state_value, state_value))
         self.current_action.setText(message)
+        self.viewport.set_status(message)
         if state_value in {"executing", "observing", "completed", "failed", "stopped", "timed_out"}:
             self.overlay.hide()
+        if state_value in {"observing", "completed", "failed", "stopped", "timed_out"}:
+            self.viewport.set_proposal(None)
+        if self.store.summary:
+            self.step_label.setText(
+                f"{self.store.summary.action_count} 个动作  ·  "
+                f"{self.store.summary.round_count} 轮观察"
+            )
         self._update_buttons()
 
     def on_log(self, level: str, message: str) -> None:
-        colors = {"warning": "#ffca7a", "error": "#ff8f8f", "state": "#7dd3fc"}
-        color = colors.get(level, "#cbd5e1")
-        self.log.append(f'<span style="color:{color}">{html.escape(message)}</span>')
+        self.activity.add_event(level, message)
 
     def on_frame(self, frame: CaptureFrame) -> None:
-        if not frame.model_path:
-            return
-        pixmap = QPixmap(str(frame.model_path))
-        self.preview.setPixmap(
-            pixmap.scaled(
-                self.preview.size(),
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
+        self.viewport.set_frame(frame)
+        if self.store.summary:
+            self.step_label.setText(
+                f"{self.store.summary.action_count} 个动作  ·  "
+                f"{self.store.summary.round_count} 轮观察"
             )
-        )
 
     def on_proposal(self, proposal: ActionProposal, frame: CaptureFrame) -> None:
         self.current_action.setText(
             f"{proposal.purpose}\n目标：{proposal.target_label}\n裁决：{proposal.decision.value}"
         )
+        self.viewport.set_proposal(proposal)
         self.overlay.show_proposal(proposal, frame)
 
     def on_finished(self, state: str, message: str) -> None:
         self.overlay.hide()
         self.confirm_frame.hide()
         self.confirmation = None
+        self.viewport.set_proposal(None)
+        self.viewport.set_status(message)
         self.on_log("info" if state == "completed" else "warning", message)
         self._update_buttons()
         QTimer.singleShot(250, self._update_buttons)
@@ -677,6 +1007,11 @@ class CyberbodyWindow(QMainWindow):
         self.pause_button.setEnabled(running and not paused)
         self.resume_button.setEnabled(running and paused)
         self.stop_button.setEnabled(running)
+        self.mode_combo.setEnabled(not running)
+        self.settings_stack.setEnabled(not running)
+        self.window_combo.setEnabled(not running)
+        self.bind_button.setEnabled(not running)
+        self.pick_button.setEnabled(not running)
 
     def _poll_hotkey(self) -> None:
         pressed = emergency_hotkey_pressed()

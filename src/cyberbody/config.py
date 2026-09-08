@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 APP_NAME = "cyberbody"
 LEGACY_KEYRING_SERVICE = "cyberbody/OpenAI"
 KEYRING_SERVICE_PREFIXES = {
+    "computer": "cyberbody/ComputerAPI",
     "vision": "cyberbody/VisionAPI",
     "action": "cyberbody/ActionAPI",
 }
@@ -21,7 +22,7 @@ _SECRET_PATTERNS = (
     re.compile(r"\bsk-[A-Za-z0-9_-]{12,}\b"),
     re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]{16,}\b", re.IGNORECASE),
     re.compile(
-        r"\b(?:OPENAI_API_KEY|CYBERBODY_(?:VISION|ACTION)_API_KEY)\s*[:=]\s*[^\s,;]+",
+        r"\b(?:OPENAI_API_KEY|CYBERBODY_(?:COMPUTER|VISION|ACTION)_API_KEY)\s*[:=]\s*[^\s,;]+",
         re.IGNORECASE,
     ),
 )
@@ -36,6 +37,9 @@ def app_data_dir() -> Path:
 
 @dataclass(slots=True)
 class AppConfig:
+    execution_mode: str = "native"
+    computer_model: str = "gpt-5.6-sol"
+    computer_base_url: str = ""
     vision_model: str = "gpt-5.6"
     action_model: str = "gpt-5.6"
     vision_base_url: str = ""
@@ -60,6 +64,9 @@ class AppConfig:
             return cls()
         if not isinstance(raw, dict):
             return cls()
+        # Configurations written before native mode existed keep their established behavior.
+        if "execution_mode" not in raw:
+            raw["execution_mode"] = "dual"
         legacy_model = raw.get("model")
         if isinstance(legacy_model, str) and legacy_model.strip():
             raw.setdefault("vision_model", legacy_model)
@@ -74,10 +81,15 @@ class AppConfig:
         return config
 
     def validate(self) -> None:
+        if self.execution_mode not in {"native", "dual"}:
+            raise ValueError("execution_mode must be native or dual")
+        if not self.computer_model.strip():
+            raise ValueError("Computer model name cannot be empty")
         if not self.vision_model.strip():
             raise ValueError("Vision model name cannot be empty")
         if not self.action_model.strip():
             raise ValueError("Action model name cannot be empty")
+        _validate_base_url("computer_base_url", self.computer_base_url)
         _validate_base_url("vision_base_url", self.vision_base_url)
         _validate_base_url("action_base_url", self.action_base_url)
         if not 1 <= self.retention_days <= 3650:

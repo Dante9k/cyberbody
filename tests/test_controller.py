@@ -59,6 +59,7 @@ class FakeApi:
     def __init__(self, risky=False):
         self.continues = 0
         self.risky = risky
+        self.acknowledged = 0
 
     def start(self, _task, _stop):
         return ComputerTurn("resp_1", "call_1", (ComputerAction(type="screenshot"),), "")
@@ -76,6 +77,9 @@ class FakeApi:
             purpose="点击删除" if self.risky else "打开项目",
             target_label="删除" if self.risky else "项目",
         )
+
+    def acknowledge_safety_checks(self):
+        self.acknowledged += 1
 
 
 def make_target():
@@ -146,3 +150,30 @@ def test_controller_does_not_execute_rejected_risk_action(tmp_path):
     assert finished.wait(3)
     assert final["state"] == SessionState.STOPPED
     assert executor.actions == []
+    assert api.acknowledged == 0
+
+
+def test_controller_acknowledges_only_after_approved_risk_action(tmp_path):
+    store = SessionStore(tmp_path / "sessions")
+    executor = FakeExecutor()
+    finished = threading.Event()
+    api = FakeApi(risky=True)
+    controller = AutomationController(
+        FakeWindows(),
+        store,
+        FakeCapture(store),
+        executor,
+        SafetyGate(),
+        lambda _callback: api,
+        ControllerEvents(
+            confirmation=lambda _proposal, _handoff: True,
+            finished=lambda _state, _message: finished.set(),
+        ),
+        preview_delay_ms=0,
+    )
+
+    controller.start("删除记录", make_target(), "computer-model", "computer-model", "native")
+
+    assert finished.wait(3)
+    assert api.acknowledged == 1
+    assert [action.type for action in executor.actions] == ["click"]

@@ -16,19 +16,25 @@
 
 # cyberbody for Windows
 
-cyberbody 是一个**人在回路中的 Windows 可视化操作智能体**。你用自然语言描述任务、明确绑定一个目标窗口；它循环执行“截图 → 视觉识别 → 文本规划 → 风险预检 → 高亮预览 → 鼠标键盘操作 → 再观察”，直到完成、停止或需要你接管。
+cyberbody 是一个**人在回路中的 Windows Computer Use 智能体**。你用自然语言描述任务、明确绑定一个目标窗口；它循环执行“截图 → 模型规划 → 风险预检 → 高亮预览 → 鼠标键盘操作 → 再观察”，直到完成、停止或需要你接管。
 
-它只依赖目标窗口的**可见像素**理解界面，不读取 UI Automation 控件树、浏览器 DOM 或应用内部数据。视觉模型把截图转换为带坐标的结构化界面描述，操作模型只读取文本 JSON 并提出下一步动作；本地安全层裁决后再由 Win32 `SendInput` 执行。因此操作模型不需要支持图片，两个模型也可以使用不同的 Responses-compatible API。
+默认的“原生 Computer Use”模式直接使用 Responses API 正式版 `computer` 工具：同一个多模态模型在持续会话中读取截图并返回结构化动作。对于不支持图片的推理模型，仍可切换到“双模型兼容”模式，让视觉模型生成界面 JSON、纯文本模型负责规划。两种模式共享本地安全裁决、窗口边界和 Win32 `SendInput` 执行层。
 
 > [!WARNING]
 > cyberbody 当前处于 Alpha 阶段，会向真实桌面发送输入。请先使用项目自带测试窗口，不要用于付款、生产后台、管理员工具或无人值守任务。它不是安全沙箱。
+
+## 与 ChatGPT Computer Use 的关系
+
+OpenAI 没有公开 ChatGPT Work 的私有界面源码。cyberbody 依据公开产品行为和 Computer Use API 重新设计：用户能看到实时画面与进度、随时暂停或接管、在敏感动作前确认，并由模型在每轮操作后验证结果。它不是 ChatGPT UI 的复制品，也不声称使用其内部代码。
+
+两者最重要的边界不同：ChatGPT Work 可以使用隔离的云端计算机或独立浏览器配置；cyberbody 第一版直接控制当前 Windows 桌面中明确绑定的窗口。因此本项目保留更严格的单窗口限制，并继续建议在测试窗口或虚拟机中运行。
 
 ## 为什么是 cyberbody
 
 很多桌面自动化方案依赖控件树、固定选择器或全桌面控制。cyberbody 选择了更窄但更透明的边界：
 
 - **一次只授权一个窗口**：目标失焦、移动、最小化、关闭或被替换时暂停。
-- **视觉与操作解耦**：截图只发给视觉接口，纯文本模型也可以承担操作规划。
+- **双执行引擎**：原生 Computer Use 获得连续视觉上下文，双模型模式兼容纯文本规划模型。
 - **动作先给人看**：点击、拖拽和输入位置先由透明覆盖层高亮，再执行。
 - **高影响动作即时确认**：删除、发送、上传、付款、权限变更和敏感输入不会静默发生。
 - **可审计**：每轮保存原始截图、模型截图、标注预览和动作级 JSONL 日志。
@@ -41,7 +47,7 @@ cyberbody 是一个**人在回路中的 Windows 可视化操作智能体**。你
 | --- | --- |
 | 任务 | 自然语言输入、单任务执行、简要状态与当前动作说明 |
 | 绑定 | 下拉窗口列表、十字准星选窗、根窗口与同进程自有模态对话框 |
-| 模型 | 独立视觉/操作模型、独立 API 地址与凭据、旧版单模型配置自动迁移 |
+| 模型 | 原生 `computer` 工具或独立视觉/操作模型；端点与凭据按角色隔离 |
 | 视觉 | 可见客户区截图、结构化元素与坐标、截图缩略图、感知哈希卡住检测 |
 | 动作 | 点击、双击、移动、滚动、拖拽、按键、Unicode/中文输入、等待、截图 |
 | 监管 | 约 500 ms 动作高亮、暂停/继续/停止、风险确认、人工接管 |
@@ -57,18 +63,15 @@ sequenceDiagram
     actor User as 用户
     participant UI as 监管面板
     participant Window as 绑定窗口
-    participant Vision as 视觉模型
-    participant Action as 操作模型
+    participant Agent as Computer agent
     participant Gate as 本地安全层
 
     User->>UI: 输入任务并绑定窗口
     UI->>Window: 捕获可见客户区
-    UI->>Vision: 截图（原始像素）
-    Vision-->>UI: 结构化元素、文字与坐标
-    UI->>Action: 用户任务 + 界面 JSON
-    Action-->>UI: 一个结构化动作
-    UI->>Vision: 标注截图风险预检
-    Vision-->>Gate: purpose / target / risk / decision
+    UI->>Agent: 任务 + 当前截图
+    Agent-->>UI: computer_call 动作批次
+    UI->>Agent: 标注截图风险预检
+    Agent-->>Gate: purpose / target / risk / decision
     Gate-->>UI: allow / confirm / handoff / deny
     UI-->>User: 高亮或请求确认
     UI->>Window: 边界复检后 SendInput
@@ -90,7 +93,7 @@ sequenceDiagram
 
 ### 方式二：从源码运行
 
-要求：Windows 10 22H2/Windows 11 x64、Python 3.12 和联网环境。视觉模型必须支持图片输入和 JSON Schema；操作模型只需支持文本输入和 JSON Schema。两端均使用 OpenAI Responses-compatible `/responses` 接口。
+要求：Windows 10 22H2/Windows 11 x64、Python 3.12 和联网环境。默认模式需要支持正式版 `computer` 工具的 Responses API 模型；双模型模式需要支持图片与 JSON Schema 的视觉模型，以及支持文本与 JSON Schema 的操作模型。
 
 ```powershell
 git clone <repository-url>
@@ -116,7 +119,20 @@ python -m venv .venv
 
 > 在姓名中输入“小明”，把进度拖到 80，勾选同意，滚动到底部并点击“下一步”；不要点击删除。
 
-## 双模型接口
+## 两种执行模式
+
+| 模式 | 模型输入 | 适用场景 |
+| --- | --- | --- |
+| 原生 Computer Use（默认） | 用户任务、持续 Responses 会话、每轮窗口截图 | 支持正式版 `computer` 工具的多模态模型；上下文连续、动作可批处理 |
+| 双模型兼容 | 视觉模型读取截图，操作模型只读取结构化文字 JSON | DeepSeek 等视觉/文本能力需要拆分，或操作模型不支持图片 |
+
+原生模式按照官方 Computer Use 循环保存 `previous_response_id`，执行 `computer_call.actions` 后以匹配的 `call_id` 回传 `computer_call_output` 截图。服务端返回安全检查时，必须先在界面中得到用户确认；未确认的检查不会被回传为已接受。
+
+### 原生 Computer Use
+
+模型和 API 地址保存在配置中，密钥从 `CYBERBODY_COMPUTER_API_KEY`、OpenAI 默认地址的 `OPENAI_API_KEY`，或 Windows Credential Manager 的 `cyberbody/ComputerAPI/<地址摘要>` 读取。模型必须明确支持 Responses API 正式版 `computer` 工具；默认值为 `gpt-5.6-sol`。
+
+### 双模型兼容
 
 面板提供两套相互独立的配置：
 
@@ -125,7 +141,7 @@ python -m venv .venv
 | 视觉模型 | 目标窗口截图 | 可操作元素、文字、状态、边界和坐标 JSON | 必须支持图片与 JSON Schema |
 | 操作模型 | 用户任务、界面 JSON、最近动作历史 | 每轮最多一个结构化动作 | 只需文本与 JSON Schema |
 
-API 地址留空时使用 OpenAI；也可填写兼容 Responses API 的 HTTPS 地址。本机模型服务可使用 `http://localhost` 或 `http://127.0.0.1`。视觉和操作接口可以来自不同服务商；第三方凭据按“角色 + API 地址摘要”隔离，修改地址后必须为新地址重新录入密钥。
+API 地址留空时使用 OpenAI；也可填写兼容 Responses API 的 HTTPS 地址。本机模型服务可使用 `http://localhost` 或 `http://127.0.0.1`。三个接口角色的凭据按“角色 + API 地址摘要”隔离，修改地址后必须为新地址重新录入密钥。
 
 例如使用 DeepSeek 时，视觉接口应选择支持图片的模型，操作接口可以选择纯文本模型：
 
@@ -138,12 +154,13 @@ API 地址留空时使用 OpenAI；也可填写兼容 Responses API 的 HTTPS �
 
 模型和 API 地址保存在 `%LOCALAPPDATA%\cyberbody\config.json`；密钥只从以下位置读取：
 
-1. `CYBERBODY_VISION_API_KEY` / `CYBERBODY_ACTION_API_KEY`；
+1. `CYBERBODY_COMPUTER_API_KEY` / `CYBERBODY_VISION_API_KEY` / `CYBERBODY_ACTION_API_KEY`；
 2. OpenAI 默认地址还可回退到 `OPENAI_API_KEY`；
 3. 面板写入的 Windows Credential Manager 条目 `cyberbody/VisionAPI/<地址摘要>` 和 `cyberbody/ActionAPI/<地址摘要>`；
 4. 旧版 OpenAI 配置可回退读取 `cyberbody/OpenAI`，但只用于 OpenAI 默认地址。
 
 ```powershell
+$env:CYBERBODY_COMPUTER_API_KEY = "<computer-api-key>"
 $env:CYBERBODY_VISION_API_KEY = "<vision-api-key>"
 $env:CYBERBODY_ACTION_API_KEY = "<action-api-key>"
 .\.venv\Scripts\cyberbody.exe start
@@ -191,7 +208,7 @@ cyberbody.exe stop
 
 ## 隐私与本地数据
 
-目标窗口截图和任务相关提示会发送到视觉接口；操作接口只接收用户任务、视觉模型生成的文本 JSON 和最近动作历史，不接收截图。两端的数据处理与保留取决于你配置的服务商及账户设置。cyberbody 自身不包含遥测或广告分析。
+原生模式会把任务、截图和动作结果发送到 Computer 接口；双模型模式把截图发给视觉接口，操作接口只接收用户任务、界面 JSON 和最近动作历史。服务端的数据处理与保留取决于所选服务商及账户设置。cyberbody 自身不包含遥测或广告分析。
 
 本地路径：
 
@@ -254,7 +271,7 @@ cyberbody/
 ├── docs/                    # 架构、隐私和发布说明
 ├── scripts/                 # 质量、隐私扫描和构建脚本
 ├── src/cyberbody/
-│   ├── api.py               # 双模型识别/规划循环与结构化预检
+│   ├── api.py               # 原生 Computer Use、双模型兼容循环与结构化预检
 │   ├── capture.py           # 可见像素截图与模型缩放
 │   ├── controller.py        # 状态机、限制和工作线程
 │   ├── input.py             # Win32 SendInput
@@ -316,6 +333,8 @@ Roadmap 不是交付承诺。欢迎在 Feature Request 中讨论用例和安全�
 ## 接口参考
 
 - [OpenAI Responses API](https://developers.openai.com/api/reference/resources/responses)
+- [OpenAI Computer use](https://developers.openai.com/api/docs/guides/tools-computer-use)
+- [ChatGPT 浏览器与计算机使用](https://learn.chatgpt.com/zh-Hans/docs/browser)
 - [OpenAI image inputs](https://developers.openai.com/api/docs/guides/images-vision)
 - [OpenAI structured outputs](https://developers.openai.com/api/docs/guides/structured-outputs)
 - [DeepSeek Vision](https://api-docs.deepseek.com/guides/vision/)
