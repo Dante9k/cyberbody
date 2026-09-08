@@ -66,6 +66,8 @@ INSPECTION_SCHEMA = {
     "additionalProperties": False,
 }
 
+NATIVE_PREFLIGHT_SCHEMA_NAME = "_".join(("cyberbody", "native", "action", "preflight"))
+
 
 ELEMENT_SCHEMA = {
     "type": "object",
@@ -427,7 +429,7 @@ class NativeComputerClient:
                 text={
                     "format": {
                         "type": "json_schema",
-                        "name": "cyberbody_native_action_preflight",
+                        "name": NATIVE_PREFLIGHT_SCHEMA_NAME,
                         "schema": INSPECTION_SCHEMA,
                     }
                 },
