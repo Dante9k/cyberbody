@@ -22,7 +22,13 @@ def target():
 
 def test_session_store_writes_summary_events_and_images(tmp_path):
     store = SessionStore(tmp_path / "sessions")
-    summary = store.start("do a thing", "vision-model", "action-model", target())
+    summary = store.start(
+        "do a thing",
+        "computer-model",
+        "computer-model",
+        target(),
+        execution_mode="native",
+    )
     source = Image.new("RGB", (80, 60), "white")
     source_path, model_path = store.save_capture(1, source, source)
     store.increment_action()
@@ -32,6 +38,7 @@ def test_session_store_writes_summary_events_and_images(tmp_path):
     assert saved["session_id"] == summary.session_id
     assert saved["state"] == "completed"
     assert saved["action_count"] == 1
+    assert saved["execution_mode"] == "native"
     assert source_path.exists() and model_path.exists()
     assert (store.session_dir / "events.jsonl").exists()
 

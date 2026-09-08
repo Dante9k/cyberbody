@@ -6,6 +6,9 @@ All notable changes to cyberbody are documented in this file. The format follows
 
 ### Added
 
+- Native Computer Use engine using the formal `computer` tool, stateful Responses loop, batched actions, and safety-check acknowledgements.
+- Agent workspace UI with a large live viewport, embedded action markers, activity timeline, execution-mode switcher, and focused takeover controls.
+- Automatic compatibility migration: existing configurations retain dual-model behavior while new installations default to native mode.
 - Independent vision and text-action model profiles with separate API URLs and credentials.
 - Structured screenshot perception so the action planner no longer requires image support.
 - GitHub Actions quality, security, dependency-audit, and Windows release workflows.
@@ -14,6 +17,7 @@ All notable changes to cyberbody are documented in this file. The format follows
 
 ### Changed
 
+- Restored the native computer-tool loop as the recommended engine while preserving dual-model execution as an explicit compatibility mode.
 - Replaced the coupled native computer-tool loop with one-action-per-observation planning.
 - Migrated legacy single-model configuration to both model roles on first load.
 - Declared x64-safe Win32 function signatures to prevent handle truncation.

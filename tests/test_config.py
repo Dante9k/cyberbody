@@ -6,6 +6,8 @@ from cyberbody.config import AppConfig, _keyring_service, redact_secrets
 def test_config_round_trip(tmp_path):
     path = tmp_path / "config.json"
     expected = AppConfig(
+        execution_mode="native",
+        computer_model="gpt-5.6-sol",
         vision_model="gpt-5.6",
         action_model="gpt-5.6-terra",
         action_base_url="https://api.example.com/v1",
@@ -16,6 +18,8 @@ def test_config_round_trip(tmp_path):
     loaded = AppConfig.load(path)
 
     assert loaded.vision_model == "gpt-5.6"
+    assert loaded.execution_mode == "native"
+    assert loaded.computer_model == "gpt-5.6-sol"
     assert loaded.action_model == "gpt-5.6-terra"
     assert loaded.action_base_url == "https://api.example.com/v1"
     assert loaded.max_actions == 25
@@ -29,6 +33,7 @@ def test_legacy_single_model_config_migrates_to_both_roles(tmp_path):
 
     assert loaded.vision_model == "legacy-model"
     assert loaded.action_model == "legacy-model"
+    assert loaded.execution_mode == "dual"
 
 
 def test_remote_base_url_requires_https(tmp_path):
@@ -48,8 +53,9 @@ def test_credentials_are_scoped_to_role_and_endpoint_without_exposing_url():
     vision_a = _keyring_service("vision", "https://provider-a.example/v1")
     vision_b = _keyring_service("vision", "https://provider-b.example/v1")
     action_a = _keyring_service("action", "https://provider-a.example/v1")
+    computer_a = _keyring_service("computer", "https://provider-a.example/v1")
 
-    assert len({vision_a, vision_b, action_a}) == 3
+    assert len({vision_a, vision_b, action_a, computer_a}) == 4
     assert "provider-a.example" not in vision_a
 
 
@@ -61,6 +67,10 @@ def test_invalid_config_falls_back_to_safe_defaults(tmp_path):
 
     path.write_text("[]", encoding="utf-8")
     assert AppConfig.load(path) == AppConfig()
+
+
+def test_new_install_defaults_to_native_computer_mode(tmp_path):
+    assert AppConfig.load(tmp_path / "missing.json").execution_mode == "native"
 
 
 def test_redaction_covers_secrets_embedded_in_messages():

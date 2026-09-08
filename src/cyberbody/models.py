@@ -21,6 +21,11 @@ class SessionState(StrEnum):
     TIMED_OUT = "timed_out"
 
 
+class ExecutionMode(StrEnum):
+    NATIVE = "native"
+    DUAL = "dual"
+
+
 TERMINAL_STATES = {
     SessionState.COMPLETED,
     SessionState.FAILED,
@@ -209,6 +214,7 @@ class SessionSummary:
     target: dict[str, Any]
     state: SessionState
     started_at: str
+    execution_mode: str = ExecutionMode.DUAL.value
     ended_at: str | None = None
     action_count: int = 0
     round_count: int = 0

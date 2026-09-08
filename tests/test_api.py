@@ -8,10 +8,14 @@ from PIL import Image
 
 from cyberbody.api import (
     DualModelClient,
+    NativeComputerClient,
+    OpenAIComputerClient,
+    PlanningBlocked,
     UnsafeScreenContent,
     _retryable,
     parse_turn,
 )
+from cyberbody.models import ComputerAction
 
 
 def png_bytes() -> bytes:
@@ -76,6 +80,33 @@ class FakeResponses:
             output=[],
             output_text=json.dumps(data),
         )
+
+
+class FakeNativeResponses:
+    def __init__(self, outputs):
+        self.outputs = list(outputs)
+        self.requests = []
+
+    def create(self, **kwargs):
+        self.requests.append(kwargs)
+        return self.outputs.pop(0)
+
+
+def computer_response(response_id, actions, *, checks=(), output_text=""):
+    return SimpleNamespace(
+        id=response_id,
+        output=[
+            SimpleNamespace(
+                type="computer_call",
+                call_id=f"call_{response_id}",
+                actions=[SimpleNamespace(**action) for action in actions],
+                pending_safety_checks=list(checks),
+            )
+        ]
+        if actions
+        else [],
+        output_text=output_text,
+    )
 
 
 def test_parse_computer_turn_and_final_message():
@@ -219,3 +250,150 @@ def test_retry_loop_never_retries_authentication_failure():
 def test_parse_turn_requires_response_id():
     with pytest.raises(ValueError, match="missing its id"):
         parse_turn(SimpleNamespace(output=[], output_text=""))
+
+
+def test_native_computer_client_preserves_responses_conversation():
+    responses = FakeNativeResponses(
+        [
+            computer_response("resp_1", [{"type": "screenshot"}]),
+            computer_response(
+                "resp_2",
+                [{"type": "click", "x": 50, "y": 40, "button": "left", "keys": []}],
+            ),
+        ]
+    )
+    client = NativeComputerClient(
+        "",
+        model="computer-model",
+        client=SimpleNamespace(responses=responses),
+        retries=0,
+    )
+
+    first = client.start("打开项目", threading.Event())
+    turn = client.continue_with_screenshot(
+        first.response_id,
+        str(first.call_id),
+        png_bytes(),
+        threading.Event(),
+    )
+
+    assert first.actions[0].type == "screenshot"
+    assert turn.actions[0].type == "click"
+    assert responses.requests[0]["tools"] == [{"type": "computer"}]
+    assert responses.requests[1]["previous_response_id"] == "resp_1"
+    output = responses.requests[1]["input"][0]
+    assert output["call_id"] == "call_resp_1"
+    assert output["output"]["type"] == "computer_screenshot"
+    assert output["output"]["detail"] == "original"
+
+
+def test_native_computer_client_rejects_action_before_first_screenshot():
+    responses = FakeNativeResponses(
+        [
+            computer_response(
+                "resp_1",
+                [{"type": "click", "x": 10, "y": 10, "button": "left", "keys": []}],
+            )
+        ]
+    )
+    client = NativeComputerClient(
+        "",
+        client=SimpleNamespace(responses=responses),
+        retries=0,
+    )
+
+    with pytest.raises(PlanningBlocked, match="观察目标窗口前"):
+        client.start("打开项目", threading.Event())
+
+
+def test_native_computer_client_requires_initial_screenshot_call():
+    responses = FakeNativeResponses([computer_response("resp_1", [], output_text="完成")])
+    client = NativeComputerClient(
+        "",
+        client=SimpleNamespace(responses=responses),
+        retries=0,
+    )
+
+    with pytest.raises(PlanningBlocked, match="没有请求首张"):
+        client.start("打开项目", threading.Event())
+
+
+def test_legacy_openai_client_constructor_maps_to_native_mode():
+    responses = FakeNativeResponses([computer_response("resp_1", [{"type": "screenshot"}])])
+    client = OpenAIComputerClient(
+        "",
+        "legacy-model",
+        30,
+        0,
+        SimpleNamespace(responses=responses),
+    )
+
+    client.start("打开项目", threading.Event())
+
+    assert responses.requests[0]["model"] == "legacy-model"
+
+
+def test_native_safety_checks_require_confirmation_and_are_acknowledged():
+    check = {"id": "safe_1", "code": "computer_initialize_state", "message": "Confirm"}
+    responses = FakeNativeResponses(
+        [
+            computer_response("resp_1", [{"type": "screenshot"}]),
+            computer_response(
+                "resp_2",
+                [{"type": "click", "x": 50, "y": 40, "button": "left", "keys": []}],
+                checks=[check],
+            ),
+            computer_response("resp_3", [], output_text="完成"),
+        ]
+    )
+    client = NativeComputerClient(
+        "",
+        client=SimpleNamespace(responses=responses),
+        retries=0,
+    )
+    stop = threading.Event()
+
+    first = client.start("打开项目", stop)
+    second = client.continue_with_screenshot(
+        first.response_id, str(first.call_id), png_bytes(), stop
+    )
+    inspection = client.inspect_action("打开项目", second.actions[0], png_bytes(), stop)
+    assert inspection.decision.value == "confirm"
+    assert "Confirm" in inspection.reason
+
+    client.acknowledge_safety_checks()
+    client.continue_with_screenshot(second.response_id, str(second.call_id), png_bytes(), stop)
+    assert responses.requests[2]["input"][0]["acknowledged_safety_checks"] == [check]
+
+
+def test_native_action_preflight_uses_annotated_image_and_structured_output():
+    result = {
+        "purpose": "打开项目",
+        "target_label": "打开按钮",
+        "risk_category": "none",
+        "decision": "allow",
+        "reason": "普通导航",
+    }
+    responses = FakeNativeResponses(
+        [SimpleNamespace(id="resp_check", output=[], output_text=json.dumps(result))]
+    )
+    client = NativeComputerClient(
+        "",
+        model="computer-model",
+        client=SimpleNamespace(responses=responses),
+        retries=0,
+    )
+
+    inspection = client.inspect_action(
+        "打开项目",
+        ComputerAction(type="click", x=50, y=40),
+        png_bytes(),
+        threading.Event(),
+    )
+
+    assert inspection.purpose == "打开项目"
+    assert inspection.decision.value == "allow"
+    request = responses.requests[0]
+    assert request["model"] == "computer-model"
+    assert request["text"]["format"]["type"] == "json_schema"
+    assert request["input"][0]["content"][1]["type"] == "input_image"
