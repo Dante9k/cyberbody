@@ -6,6 +6,7 @@ All notable changes to cyberbody are documented in this file. The format follows
 
 ### Added
 
+- Branded four-hand keyboard icon for the Qt window, taskbar, packaged executable, and Windows shell sizes from 16 to 256 pixels.
 - Native Computer Use engine using the formal `computer` tool, stateful Responses loop, batched actions, and safety-check acknowledgements.
 - Agent workspace UI with a large live viewport, embedded action markers, activity timeline, execution-mode switcher, and focused takeover controls.
 - Automatic compatibility migration: existing configurations retain dual-model behavior while new installations default to native mode.

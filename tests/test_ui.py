@@ -1,6 +1,36 @@
 import os
 
 
+def test_application_icon_assets_are_available():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PIL import Image
+    from PySide6.QtGui import QIcon
+    from PySide6.QtWidgets import QApplication
+
+    from cyberbody.ui import application_icon_path
+
+    _app = QApplication.instance() or QApplication([])
+    png_path = application_icon_path()
+    ico_path = png_path.with_suffix(".ico")
+
+    assert png_path.is_file()
+    assert not QIcon(str(png_path)).isNull()
+    assert ico_path.is_file()
+    with Image.open(ico_path) as icon:
+        assert icon.info["sizes"] == {
+            (16, 16),
+            (20, 20),
+            (24, 24),
+            (32, 32),
+            (40, 40),
+            (48, 48),
+            (64, 64),
+            (96, 96),
+            (128, 128),
+            (256, 256),
+        }
+
+
 def test_live_viewport_renders_frame_and_action_marker(tmp_path):
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PIL import Image
