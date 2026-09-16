@@ -13,6 +13,7 @@ from PySide6.QtCore import QObject, QPoint, QRect, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QCloseEvent,
     QColor,
+    QIcon,
     QKeyEvent,
     QMouseEvent,
     QPainter,
@@ -57,6 +58,12 @@ from .windows import (
     exclude_window_from_capture,
     virtual_screen_rect,
 )
+
+
+def application_icon_path() -> Path:
+    """Return the app icon location for source, wheel, and PyInstaller runs."""
+
+    return Path(__file__).resolve().parent / "assets" / "cyberbody-icon.png"
 
 
 @dataclass(slots=True)
@@ -1099,9 +1106,13 @@ class CyberbodyWindow(QMainWindow):
 
 
 def run_gui(initial_task: str = "") -> int:
-    app = QApplication.instance() or QApplication([])
+    existing_app = QApplication.instance()
+    app = existing_app if isinstance(existing_app, QApplication) else QApplication([])
     app.setApplicationName("cyberbody")
     app.setOrganizationName("cyberbody")
+    icon_path = application_icon_path()
+    if icon_path.is_file():
+        app.setWindowIcon(QIcon(str(icon_path)))
     window = CyberbodyWindow(initial_task)
     window.show()
     return app.exec()

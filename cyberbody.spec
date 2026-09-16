@@ -15,7 +15,7 @@ a = Analysis(
     ["cyberbody_entry.py"],
     pathex=["src"],
     binaries=[],
-    datas=[],
+    datas=[("src/cyberbody/assets/cyberbody-icon.png", "cyberbody/assets")],
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
@@ -24,6 +24,17 @@ a = Analysis(
     noarchive=False,
     optimize=1,
 )
+
+# Some development shells put Poppler on PATH. Its ICU DLLs are ABI-incompatible
+# with Qt and must not shadow the Windows 10/11 system ICU used by PySide6.
+a.binaries = [
+    entry
+    for entry in a.binaries
+    if not (
+        entry[0].casefold() in {"icuuc.dll", "icudt78.dll"}
+        and "poppler" in str(entry[1]).casefold()
+    )
+]
 pyz = PYZ(a.pure)
 
 exe = EXE(
@@ -38,6 +49,7 @@ exe = EXE(
     upx=True,
     console=True,
     disable_windowed_traceback=False,
+    icon=["src/cyberbody/assets/cyberbody-icon.ico"],
 )
 
 coll = COLLECT(
